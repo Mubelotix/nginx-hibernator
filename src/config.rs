@@ -87,22 +87,54 @@ fn deserialize_duration<'de, D>(deserializer: D) -> Result<u64, D::Error> where 
 
 #[derive(Debug, Deserialize)]
 pub struct SiteConfig {
-    name: String,
+    pub name: String,
 
-    access_log: String,
+    #[serde(default)]
+    pub nginx_available_config: Option<String>,
     
     #[serde(default)]
-    access_log_filter: Option<String>,
+    pub nginx_enabled_config: Option<String>,
+
+    pub access_log: String,
     
-    service_name: String,
+    #[serde(default)]
+    pub access_log_filter: Option<String>,
+    
+    pub service_name: String,
 
     #[serde(deserialize_with = "deserialize_duration")]
-    keep_alive: u64,
+    pub keep_alive: u64,
+}
+
+impl SiteConfig {
+    pub fn nginx_available_config(&self) -> String {
+        match &self.nginx_available_config {
+            Some(config) => config.clone(),
+            None => format!("/etc/nginx/sites-available/{}", self.name),
+        }
+    }
+
+    pub fn nginx_enabled_config(&self) -> String {
+        match &self.nginx_enabled_config {
+            Some(config) => config.clone(),
+            None => format!("/etc/nginx/sites-enabled/{}", self.name),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
 pub struct TopLevelConfig {
-    
+    #[serde(default)]
+    pub nginx_hibernator_config: Option<String>,
+}
+
+impl TopLevelConfig {
+    pub fn nginx_hibernator_config(&self) -> String {
+        match &self.nginx_hibernator_config {
+            Some(config) => config.clone(),
+            None => String::from("/etc/nginx/sites-available/hibernator"),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
