@@ -140,8 +140,8 @@ impl TopLevelConfig {
 #[derive(Debug, Deserialize)]
 pub struct Config {
     #[serde(flatten)]
-    top_level: TopLevelConfig,
+    pub top_level: TopLevelConfig,
 
     #[serde(default)]
-    sites: Vec<SiteConfig>,
+    pub sites: Vec<SiteConfig>,
 }
