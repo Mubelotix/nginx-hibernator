@@ -81,6 +81,39 @@ fn deserialize_duration<'de, D>(deserializer: D) -> Result<u64, D::Error> where 
     deserializer.deserialize_any(DurationString)
 }
 
+#[derive(Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProxyMode {
+    All,
+    #[default]
+    NonBrowser,
+    None,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ProxyTimeout(pub u64);
+impl Default for ProxyTimeout {
+    fn default() -> Self {
+        ProxyTimeout(28000)
+    }
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ProxyPollInterval(pub u64);
+impl Default for ProxyPollInterval {
+    fn default() -> Self {
+        ProxyPollInterval(500)
+    }
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ProxyPollTimeout(pub u64);
+impl Default for ProxyPollTimeout {
+    fn default() -> Self {
+        ProxyPollTimeout(30000)
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct SiteConfig {
     pub name: String,
@@ -101,6 +134,18 @@ pub struct SiteConfig {
     pub service_name: String,
 
     pub hosts: Vec<String>,
+
+    #[serde(default)]
+    pub proxy_mode: ProxyMode,
+
+    #[serde(default)]
+    pub proxy_timeout_ms: ProxyTimeout,
+
+    #[serde(default)]
+    pub proxy_poll_interval_ms: ProxyPollInterval,
+
+    #[serde(default)]
+    pub proxy_poll_timeout_ms: ProxyPollTimeout,
 
     #[serde(deserialize_with = "deserialize_duration")]
     pub keep_alive: u64,

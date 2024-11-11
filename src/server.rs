@@ -1,5 +1,5 @@
 use std::{io::{BufRead, BufReader, Read, Write}, net::{TcpListener, TcpStream}, sync::mpsc::channel, thread::{sleep, spawn}, time::Duration};
-use crate::{is_port_open, start_server, Config};
+use crate::{is_port_open, start_server, Config, ProxyMode};
 use log::*;
 
 pub fn setup_server(config: &'static Config) {
@@ -24,9 +24,9 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
 
     let host = http_request
         .iter()
-        .find(|line| line.starts_with("Host: "))
+        .find(|line| line.to_lowercase().starts_with("host: "))
         .map(|line| &line[6..])
-        .map(|host| host.to_string());
+        .map(|host| host.to_lowercase());
 
     let host = match host {
         Some(host) => host,
@@ -58,8 +58,9 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
 
     // Fail rightaway if the client is a browser, so that it quickly displays a waiting page to the user
     let is_browser_navigate = http_request.iter().any(|line| line.starts_with("Sec-Fetch-Mode: navigate"));
-    if is_browser_navigate {
-        debug!("Client is a browser, returning 503 right away");
+    let should_proxy = site_config.proxy_mode == ProxyMode::None || (site_config.proxy_mode == ProxyMode::NonBrowser && is_browser_navigate);
+    if !should_proxy {
+        debug!("Returning 503 right away");
         let status_line = "HTTP/1.1 503 Service Unavailable";
         let content = include_str!("../static/index.html").replace("KEEP_ALIVE", &site_config.keep_alive.to_string());
         let length = content.len();
@@ -85,9 +86,10 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
             return;
         }
         debug!("Site started, waiting for port to open");
+        let max_polls = site_config.proxy_poll_timeout_ms.0 / site_config.proxy_poll_interval_ms.0;
         let mut counter = 0;
         loop {
-            if counter >= 60 { // TODO: config option
+            if counter > max_polls {
                 warn!("Site {} took too long to start", site_config.name);
                 break;
             }
@@ -96,13 +98,13 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
                 let _ = sender.send(Ok(()));
                 break;
             }
-            sleep(Duration::from_millis(500)); // TODO: config option
+            sleep(Duration::from_millis(site_config.proxy_poll_interval_ms.0));
             counter += 1;
         }
 
     });
 
-    let r = receiver.recv_timeout(Duration::from_secs(28)); // TODO: config option
+    let r = receiver.recv_timeout(Duration::from_millis(site_config.proxy_timeout_ms.0));
     match r {
         Ok(Ok(())) => {
             debug!("Connecting to target site {}", site_config.name);
