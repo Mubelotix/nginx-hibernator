@@ -5,7 +5,7 @@
 // service_name = "webserver" # The name of the service that runs the site
 // keep_alive = "5m" # Time to keep the site running after the last access
 
-use std::{collections::{BinaryHeap, HashSet, VecDeque}, fmt, fs::{read_link, File}, net::{TcpStream, UdpSocket}, os::unix::fs::symlink, process::Command, sync::{Arc, Mutex}, thread::sleep, time::Duration};
+use std::{collections::{BinaryHeap, HashMap, HashSet, VecDeque}, fmt, fs::{read_link, File}, net::{TcpStream, UdpSocket}, os::unix::fs::symlink, process::Command, sync::{Arc, LazyLock, Mutex}, thread::sleep, time::Duration};
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{de::{self, Visitor}, Deserialize, Deserializer};
@@ -13,6 +13,40 @@ use rev_lines::RevLines;
 
 mod config;
 use config::*;
+
+fn can_be_stopped(site_index: usize) -> bool {
+    static LAST_STOPPED: LazyLock<Arc<Mutex<HashMap<usize, u64>>>> = LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+    let now = Utc::now().timestamp() as u64;
+    let mut last_stopped_table = LAST_STOPPED.lock().unwrap();
+    let last_stopped = last_stopped_table.get(&site_index);
+    if let Some(last_stopped) = last_stopped {
+        if now.saturating_sub(*last_stopped) < 60 {
+            return false;
+        }
+    }
+
+    last_stopped_table.insert(site_index, now);
+
+    true
+}
+
+fn can_be_started(site_index: usize) -> bool {
+    static LAST_STARTED: LazyLock<Arc<Mutex<HashMap<usize, u64>>>> = LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+    let now = Utc::now().timestamp() as u64;
+    let mut last_started_table = LAST_STARTED.lock().unwrap();
+    let last_started = last_started_table.get(&site_index);
+    if let Some(last_started) = last_started {
+        if now.saturating_sub(*last_started) < 60*3 {
+            return false;
+        }
+    }
+
+    last_started_table.insert(site_index, now);
+
+    true
+}
 
 #[derive(Debug, Clone, Copy)]
 enum ShouldShutdown {
@@ -77,7 +111,11 @@ fn checking_symlink(original: &str, link: &str) -> anyhow::Result<bool> {
     Ok(true)
 }
 
-fn shutdown_server(config: &TopLevelConfig, site_config: &SiteConfig) -> anyhow::Result<()> {
+fn shutdown_server(config: &TopLevelConfig, site_config: &SiteConfig, config_index: usize) -> anyhow::Result<()> {
+    if !can_be_stopped(config_index) {
+        return Ok(());
+    }
+
     if checking_symlink(&config.nginx_hibernator_config(), &site_config.nginx_enabled_config())? {
         // Reload nginx
         let status = Command::new("sh")
@@ -101,7 +139,11 @@ fn shutdown_server(config: &TopLevelConfig, site_config: &SiteConfig) -> anyhow:
     Ok(())
 }
 
-fn start_server(config: &SiteConfig) -> anyhow::Result<()> {
+fn start_server(config: &SiteConfig, config_index: usize) -> anyhow::Result<()> {
+    if !can_be_started(config_index) {
+        return Ok(());
+    }
+
     if checking_symlink(&config.nginx_available_config(), &config.nginx_enabled_config())? {
         // Reload nginx
         let status = Command::new("sh")
@@ -146,7 +188,6 @@ fn test() {
 #[derive(PartialEq, Eq)]
 struct PendingCheck {
     site_index: usize,
-    up: bool,
     check_at: u64,
 }
 
@@ -172,38 +213,41 @@ fn main() {
     for site_index in 0..config.sites.len() {
         check_queue.push(PendingCheck {
             site_index,
-            up: true, // TODO: check if the site is up
             check_at: now,
         });
     }
 
-    while let Some(PendingCheck { site_index, up, check_at }) = check_queue.pop() {
+    while let Some(PendingCheck { site_index, check_at }) = check_queue.pop() {
         let to_wait = check_at.saturating_sub(Utc::now().timestamp() as u64);
         sleep(Duration::from_secs(to_wait));
 
         let site_config = &config.sites[site_index];
+        let up = is_port_open(site_config.port);
         match up {
             true => {
                 let should_shutdown = should_shutdown(site_config).unwrap();
                 match should_shutdown {
                     ShouldShutdown::Now => {
-                        shutdown_server(&config.top_level, site_config).unwrap();
+                        shutdown_server(&config.top_level, site_config, site_index).unwrap();
                         check_queue.push(PendingCheck {
                             site_index,
-                            up: false,
                             check_at: now + site_config.keep_alive,
                         });
                     },
                     ShouldShutdown::NotUntil(next_check) => {
                         check_queue.push(PendingCheck {
                             site_index,
-                            up: true,
                             check_at: next_check,
                         });
                     },
                 }
             },
-            false => todo!(),
+            false => {
+                check_queue.push(PendingCheck {
+                    site_index,
+                    check_at: now + site_config.keep_alive,
+                });
+            },
         }
     }
 }
