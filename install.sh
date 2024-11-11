@@ -29,7 +29,7 @@ source_rustup_functions
 
 get_architecture
 arch="$RETVAL"
-filename="nginx_hibernator_${arch}"
+filename="nginx-hibernator_${arch}"
 latest_url=$(curl -sSL -w "%{url_effective}" -o /dev/null "https://github.com/Mubelotix/nginx-hibernator/releases/latest")
 version=$(echo "$latest_url" | sed 's:.*/::')
 download_url="https://github.com/mubelotix/nginx-hibernator/releases/download/$version/nginx-hibernator-$arch"
