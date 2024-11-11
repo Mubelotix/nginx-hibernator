@@ -4,6 +4,11 @@ A simple program that detects when your sites are not used by anyone and shuts t
 
 It reads nginx access logs to determine when a site is being used, and systemd to start and stop the site.
 
+You can hibernate any service that :
+- Provides an HTTP API
+- Is proxied by nginx
+- Can be started and stopped by systemd
+
 ## Configuration
 
 <!--
