@@ -60,6 +60,8 @@ enum ShouldShutdown {
 }
 
 fn should_shutdown(config: &'static SiteConfig) -> anyhow::Result<ShouldShutdown> {
+    debug!("Checking if site {} should be shut down", config.name);
+
     // Find the last line of the file
     let file = File::open(&config.access_log).map_err(|e| anyhow!("could not open access log: {e}"))?;
     let mut rev_lines = RevLines::new(file);
@@ -91,19 +93,24 @@ fn should_shutdown(config: &'static SiteConfig) -> anyhow::Result<ShouldShutdown
 
     // Calculate the last action timestamp
     let mut last_action = last_request.timestamp() as u64;
+    trace!("Last request was at {}", last_action);
     if let Some(last_started) = get_last_started(&config.name) {
+        trace!("Last started was at {}", last_started);
         last_action = max(last_action, last_started);
     }
     if let Some(last_stopped) = get_last_stopped(&config.name) {
+        trace!("Last stopped was at {}", last_stopped);
         last_action = max(last_action, last_stopped);
     }
     
     // Check if the site should be shut down
     let time_since = (Utc::now().timestamp() as u64).saturating_sub(last_action);
     if time_since > config.keep_alive {
+        debug!("Site {} should be shut down now", config.name);
         Ok(ShouldShutdown::Now)
     } else {
         let next_check = last_action + config.keep_alive + 1;
+        debug!("Site {} should not be shut down until {next_check}", config.name);
         Ok(ShouldShutdown::NotUntil(next_check))
     }
 }
@@ -126,28 +133,31 @@ fn checking_symlink(original: &str, link: &str) -> anyhow::Result<bool> {
     Ok(true)
 }
 
+fn run_command(command: &str) -> anyhow::Result<()> {
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .output()
+        .map_err(|e| anyhow!("could not run command: {e}"))?;
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!("command failed: {command} {stdout} {stderr}"));
+    }
+
+    Ok(())
+}
+
 fn shutdown_server(config: &TopLevelConfig, site_config: &'static SiteConfig) -> anyhow::Result<()> {
     mark_stopped(&site_config.name);
 
+    info!("Shutting down site {}", site_config.name);
+
     if checking_symlink(&config.nginx_hibernator_config(), &site_config.nginx_enabled_config())? {
-        // Reload nginx
-        let status = Command::new("sh")
-            .arg("-c")
-            .arg("nginx -s reload")
-            .status()?;
-        if !status.success() {
-            return Err(anyhow::anyhow!("nginx reload failed"));
-        }
+        run_command("nginx -s reload")?;
     }
 
-    // Shutdown the service
-    let status = Command::new("systemctl")
-        .arg("stop")
-        .arg(&site_config.service_name)
-        .status()?;
-    if !status.success() {
-        return Err(anyhow::anyhow!("service stop failed"));
-    }
+    run_command(&format!("systemctl stop {}", site_config.service_name))?;
 
     Ok(())
 }
@@ -158,25 +168,13 @@ fn start_server(site_config: &'static SiteConfig) -> anyhow::Result<()> {
         return Ok(());
     }
 
+    info!("Starting site {}", site_config.name);
+
     if checking_symlink(&site_config.nginx_available_config(), &site_config.nginx_enabled_config())? {
-        // Reload nginx
-        let status = Command::new("sh")
-            .arg("-c")
-            .arg("nginx -s reload")
-            .status()?;
-        if !status.success() {
-            return Err(anyhow!("nginx reload failed"));
-        }
+        run_command("nginx -s reload")?;
     }
 
-    // Start the service
-    let status = Command::new("systemctl")
-        .arg("start")
-        .arg(&site_config.service_name)
-        .status()?;
-    if !status.success() {
-        return Err(anyhow!("service start failed"));
-    }
+    run_command(&format!("systemctl start {}", site_config.service_name))?;
 
     Ok(())
 }
@@ -233,7 +231,6 @@ fn main() {
         let up = is_port_open(site_config.port);
         match up {
             true => {
-                debug!("Checking if site {} should be shut down", site_config.name);
                 let should_shutdown = match should_shutdown(site_config) {
                     Ok(should_shutdown) => should_shutdown,
                     Err(err) => {
@@ -243,7 +240,6 @@ fn main() {
                 };
                 match should_shutdown {
                     ShouldShutdown::Now => {
-                        info!("Shutting down site {}", site_config.name);
                         shutdown_server(&config.top_level, site_config).unwrap();
                         check_queue.push(PendingCheck {
                             site_index,
@@ -251,7 +247,6 @@ fn main() {
                         });
                     },
                     ShouldShutdown::NotUntil(next_check) => {
-                        debug!("Site {} should not be shut down until {}", site_config.name, next_check);
                         check_queue.push(PendingCheck {
                             site_index,
                             check_at: next_check,
@@ -260,8 +255,6 @@ fn main() {
                 }
             },
             false => {
-                debug!("Rescheduling check for site {}", site_config.name);
-
                 check_queue.push(PendingCheck {
                     site_index,
                     check_at: now + site_config.keep_alive,
