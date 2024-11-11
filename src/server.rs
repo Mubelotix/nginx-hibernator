@@ -1,4 +1,4 @@
-use std::{io::{BufRead, BufReader, Write}, net::{TcpListener, TcpStream}, thread::spawn};
+use std::{fs::read_to_string, io::{BufRead, BufReader, Write}, net::{TcpListener, TcpStream}, thread::spawn};
 
 use crate::{start_server, Config, TopLevelConfig};
 
@@ -32,36 +32,36 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
         Some(host) => host,
         None => {
             let status_line = "HTTP/1.1 400 Bad Request";
-            let contents = "Hibernator requires a Host header";
-            let length = contents.len();
-            let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{contents}");
+            let content = "Hibernator requires a Host header";
+            let length = content.len();
+            let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
             stream.write_all(response.as_bytes()).unwrap();
             return;
         }
     };
 
-    let site_index = config.sites.iter().position(|site| site.hosts.contains(&host));
+    let site_config = config.sites.iter().find(|site| site.hosts.contains(&host));
 
-    let site_index = match site_index {
-        Some(site_index) => site_index,
+    let site_config = match site_config {
+        Some(site_config) => site_config,
         None => {
             let status_line = "HTTP/1.1 404 Not Found";
-            let contents = "Hibernator doesn't know about the site you're trying to access";
-            let length = contents.len();
-            let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{contents}");
+            let content = "Hibernator doesn't know about the site you're trying to access";
+            let length = content.len();
+            let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
             stream.write_all(response.as_bytes()).unwrap();
             return;
         }
     };
 
     let status_line = "HTTP/1.1 503 Service Unavailable";
-    let contents = include_str!("../static/index.html");
-    let length = contents.len();
+    let content = include_str!("../static/index.html").replace("KEEP_ALIVE", &site_config.keep_alive.to_string());
+    let length = content.len();
     let response = format!(
-        "{status_line}\r\nContent-Length: {length}\r\n\r\n{contents}"
+        "{status_line}\r\nContent-Length: {length}\r\n\r\n{content}"
     );
     stream.write_all(response.as_bytes()).unwrap();
 
-    start_server(&config.sites[site_index], site_index).unwrap();
+    start_server(site_config).unwrap();
 }
 

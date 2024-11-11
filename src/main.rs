@@ -5,11 +5,12 @@
 // service_name = "webserver" # The name of the service that runs the site
 // keep_alive = "5m" # Time to keep the site running after the last access
 
-use std::{collections::{BinaryHeap, HashMap, HashSet, VecDeque}, fmt, fs::{read_link, File}, net::{TcpStream, UdpSocket}, os::unix::fs::symlink, process::Command, sync::{Arc, LazyLock, Mutex}, thread::sleep, time::Duration};
+use std::{cmp::max, collections::{BinaryHeap, HashMap, HashSet, VecDeque}, fmt, fs::{read_link, remove_file, File}, net::{TcpStream, UdpSocket}, os::unix::fs::symlink, process::Command, sync::{Arc, LazyLock, Mutex}, thread::sleep, time::Duration};
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{de::{self, Visitor}, Deserialize, Deserializer};
 use rev_lines::RevLines;
+use anyhow::anyhow;
 use log::*;
 
 mod config;
@@ -17,36 +18,37 @@ use config::*;
 mod server;
 use server::*;
 
-fn can_be_stopped(site_index: usize) -> bool {
-    static LAST_STOPPED: LazyLock<Arc<Mutex<HashMap<usize, u64>>>> = LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
+static LAST_STOPPED: LazyLock<Arc<Mutex<HashMap<&'static str, u64>>>> = LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
 
-    let now = Utc::now().timestamp() as u64;
-    let mut last_stopped_table = LAST_STOPPED.lock().unwrap();
-    let last_stopped = last_stopped_table.get(&site_index);
-    if let Some(last_stopped) = last_stopped {
-        if now.saturating_sub(*last_stopped) < 60 {
-            return false;
-        }
-    }
-
-    last_stopped_table.insert(site_index, now);
-
-    true
+fn get_last_stopped(site_name: &'static str) -> Option<u64> {
+    let last_stopped_table = LAST_STOPPED.lock().unwrap();
+    last_stopped_table.get(site_name).copied()
 }
 
-fn can_be_started(site_index: usize) -> bool {
-    static LAST_STARTED: LazyLock<Arc<Mutex<HashMap<usize, u64>>>> = LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
+fn mark_stopped(site_name: &'static str) {
+    let now = Utc::now().timestamp() as u64;
+    let mut last_stopped_table = LAST_STOPPED.lock().unwrap();
+    last_stopped_table.insert(site_name, now);
+}
 
+static LAST_STARTED: LazyLock<Arc<Mutex<HashMap<&'static str, u64>>>> = LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+fn get_last_started(site_name: &'static str) -> Option<u64> {
+    let last_started_table = LAST_STARTED.lock().unwrap();
+    last_started_table.get(site_name).copied()
+}
+
+fn try_mark_started(site_config: &'static SiteConfig) -> bool {
     let now = Utc::now().timestamp() as u64;
     let mut last_started_table = LAST_STARTED.lock().unwrap();
-    let last_started = last_started_table.get(&site_index);
+    let last_started = last_started_table.get(site_config.name.as_str());
     if let Some(last_started) = last_started {
-        if now.saturating_sub(*last_started) < 60*3 {
+        if now.saturating_sub(*last_started) < site_config.keep_alive {
             return false;
         }
     }
 
-    last_started_table.insert(site_index, now);
+    last_started_table.insert(site_config.name.as_str(), now);
 
     true
 }
@@ -57,12 +59,12 @@ enum ShouldShutdown {
     NotUntil(u64),
 }
 
-fn should_shutdown(config: &SiteConfig) -> anyhow::Result<ShouldShutdown> {
+fn should_shutdown(config: &'static SiteConfig) -> anyhow::Result<ShouldShutdown> {
     // Find the last line of the file
-    let file = File::open(&config.access_log)?;
+    let file = File::open(&config.access_log).map_err(|e| anyhow!("could not open access log: {e}"))?;
     let mut rev_lines = RevLines::new(file);
     let last_line = loop {
-        let potential_last_line = rev_lines.next().ok_or(anyhow::anyhow!("no more lines in access log"))??;
+        let potential_last_line = rev_lines.next().ok_or(anyhow!("no more lines in access log"))??;
         if let Some(filter) = &config.access_log_filter {
             if potential_last_line.contains(filter) {
                 break potential_last_line;
@@ -75,10 +77,10 @@ fn should_shutdown(config: &SiteConfig) -> anyhow::Result<ShouldShutdown> {
     
     // Parse the date of the last request
     let last_request = loop {
-        let start_position = last_line.find('[').ok_or(anyhow::anyhow!("no date in last line"))?;
+        let start_position = last_line.find('[').ok_or(anyhow!("no date in last line"))?;
         last_line = &last_line[start_position + 1..];
 
-        let end_position = last_line.find(']').ok_or(anyhow::anyhow!("no date in last line"))?;
+        let end_position = last_line.find(']').ok_or(anyhow!("no date in last line"))?;
         let date_str = &last_line[..end_position];
         last_line = &last_line[end_position + 1..];
 
@@ -86,13 +88,22 @@ fn should_shutdown(config: &SiteConfig) -> anyhow::Result<ShouldShutdown> {
 
         break date;
     };
+
+    // Calculate the last action timestamp
+    let mut last_action = last_request.timestamp() as u64;
+    if let Some(last_started) = get_last_started(&config.name) {
+        last_action = max(last_action, last_started);
+    }
+    if let Some(last_stopped) = get_last_stopped(&config.name) {
+        last_action = max(last_action, last_stopped);
+    }
     
     // Check if the site should be shut down
-    let time_since = (Utc::now().timestamp() - last_request.timestamp()) as u64;
+    let time_since = (Utc::now().timestamp() as u64).saturating_sub(last_action);
     if time_since > config.keep_alive {
         Ok(ShouldShutdown::Now)
     } else {
-        let next_check = last_request.timestamp() as u64 + config.keep_alive;
+        let next_check = last_action + config.keep_alive + 1;
         Ok(ShouldShutdown::NotUntil(next_check))
     }
 }
@@ -110,14 +121,13 @@ fn checking_symlink(original: &str, link: &str) -> anyhow::Result<bool> {
     }
 
     // Replace nginx config with hibernator config
-    symlink(original, link)?;
+    remove_file(link).map_err(|e| anyhow!("could not remove previous symlink: {e}"))?;
+    symlink(original, link).map_err(|e| anyhow!("could not create symlink: {e}"))?;
     Ok(true)
 }
 
-fn shutdown_server(config: &TopLevelConfig, site_config: &SiteConfig, config_index: usize) -> anyhow::Result<()> {
-    if !can_be_stopped(config_index) {
-        return Ok(());
-    }
+fn shutdown_server(config: &TopLevelConfig, site_config: &'static SiteConfig) -> anyhow::Result<()> {
+    mark_stopped(&site_config.name);
 
     if checking_symlink(&config.nginx_hibernator_config(), &site_config.nginx_enabled_config())? {
         // Reload nginx
@@ -142,51 +152,33 @@ fn shutdown_server(config: &TopLevelConfig, site_config: &SiteConfig, config_ind
     Ok(())
 }
 
-fn start_server(config: &SiteConfig, config_index: usize) -> anyhow::Result<()> {
-    if !can_be_started(config_index) {
+fn start_server(site_config: &'static SiteConfig) -> anyhow::Result<()> {
+    if !try_mark_started(site_config) {
+        trace!("Site {} cannot be started yet (under cooldown)", site_config.name);
         return Ok(());
     }
 
-    if checking_symlink(&config.nginx_available_config(), &config.nginx_enabled_config())? {
+    if checking_symlink(&site_config.nginx_available_config(), &site_config.nginx_enabled_config())? {
         // Reload nginx
         let status = Command::new("sh")
             .arg("-c")
             .arg("nginx -s reload")
             .status()?;
         if !status.success() {
-            return Err(anyhow::anyhow!("nginx reload failed"));
+            return Err(anyhow!("nginx reload failed"));
         }
     }
 
     // Start the service
     let status = Command::new("systemctl")
         .arg("start")
-        .arg(&config.service_name)
+        .arg(&site_config.service_name)
         .status()?;
     if !status.success() {
-        return Err(anyhow::anyhow!("service start failed"));
+        return Err(anyhow!("service start failed"));
     }
 
     Ok(())
-}
-
-#[test]
-fn test() {
-    let site_config = SiteConfig {
-        name: "example".to_string(),
-        nginx_available_config: None,
-        nginx_enabled_config: None,
-        port: 8000,
-        hosts: vec![String::from("localhost")],
-        access_log: "test.log".to_string(),
-        access_log_filter: None,
-        service_name: "webserver".to_string(),
-        keep_alive: 5 * 60,
-    };
-
-    let result = should_shutdown(&site_config).unwrap();
-
-    println!("{:?}", result);
 }
 
 #[derive(PartialEq, Eq)]
@@ -207,8 +199,6 @@ impl PartialOrd for PendingCheck {
     }
 }
 
-
-
 fn main() { 
     env_logger::init();
 
@@ -224,7 +214,7 @@ fn main() {
     info!("Hibernator started");
 
     let mut check_queue: BinaryHeap<PendingCheck> = BinaryHeap::new();
-    let now = Utc::now().timestamp() as u64;
+    let mut now = Utc::now().timestamp() as u64;
     for site_index in 0..config.sites.len() {
         check_queue.push(PendingCheck {
             site_index,
@@ -233,20 +223,28 @@ fn main() {
     }
 
     while let Some(PendingCheck { site_index, check_at }) = check_queue.pop() {
-        let to_wait = check_at.saturating_sub(Utc::now().timestamp() as u64);
+        now = Utc::now().timestamp() as u64;
+        let to_wait = check_at.saturating_sub(now);
         let site_config = &config.sites[site_index];
         debug!("Waiting for {to_wait} seconds before checking site {}", site_config.name);
         sleep(Duration::from_secs(to_wait));
+        now = Utc::now().timestamp() as u64;
 
         let up = is_port_open(site_config.port);
         match up {
             true => {
                 debug!("Checking if site {} should be shut down", site_config.name);
-                let should_shutdown = should_shutdown(site_config).unwrap();
+                let should_shutdown = match should_shutdown(site_config) {
+                    Ok(should_shutdown) => should_shutdown,
+                    Err(err) => {
+                        error!("Error while checking site {}: {err}", site_config.name);
+                        continue;
+                    },
+                };
                 match should_shutdown {
                     ShouldShutdown::Now => {
                         info!("Shutting down site {}", site_config.name);
-                        shutdown_server(&config.top_level, site_config, site_index).unwrap();
+                        shutdown_server(&config.top_level, site_config).unwrap();
                         check_queue.push(PendingCheck {
                             site_index,
                             check_at: now + site_config.keep_alive,

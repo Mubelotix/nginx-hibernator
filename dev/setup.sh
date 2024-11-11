@@ -64,6 +64,8 @@ server {
 }
 EOF
 
+# Enable the NGINX configuration by creating a symlink to sites-enabled
+sudo ln -fs $NGINX_CONFIG /etc/nginx/sites-enabled/
 
 # Define the NGINX configuration file
 NGINX_HIBERNATOR_CONFIG="/etc/nginx/sites-available/hibernator"
@@ -82,9 +84,6 @@ server {
     }
 }
 EOF
-
-# Enable the NGINX configuration by creating a symlink to sites-enabled
-sudo ln -fs $NGINX_HIBERNATOR_CONFIG /etc/nginx/sites-enabled/
 
 # Remove the default NGINX configuration
 sudo rm /etc/nginx/sites-enabled/default || true

@@ -6,14 +6,17 @@
     <title>Please wait...</title>
 </head>
 <body>
-    <h1>Please wait for the server to start</h1>
+    <h1>Please wait a few seconds</h1>
     <p>
-        If you see this message, it means that the server is not yet running. Please wait a few seconds, this page will automatically refresh when the server is ready.
+        The server is currently booting up. The page will show once it's ready.
+    </p>
+    <p>
+        Want to use a lightweight hibernator on your own server? Take a look at <a href="https://github.com/mubelotix/nginx-site-hibernator">our GitHub</a>.
     </p>
     <script>
         setTimeout(() => {
             window.location.reload();
-        }, 3000);
+        }, Math.min(KEEP_ALIVE * 1000, 3000));
     </script>
 </body>
 </html>
