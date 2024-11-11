@@ -7,6 +7,12 @@ You can hibernate any service that :
 - Is proxied by nginx
 - Can be started and stopped by systemd
 
+## Installing
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Mubelotix/nginx-hibernator/master/install.sh | sh
+```
+
 ## Configuration
 
 <!--
