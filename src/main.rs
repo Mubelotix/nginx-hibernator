@@ -128,23 +128,20 @@ fn main() {
     // Make sure the hibernator config file exists
     let hibernator_config = config.top_level.nginx_hibernator_config();
     if !Path::new(&hibernator_config).exists() {
-        error!("Hibernator config file doesn't exist at {}", hibernator_config);
-        return;
+        panic!("Hibernator config file doesn't exist at {}", hibernator_config);
     }
 
     // Make sure every access log exists
     for site_config in &config.sites {
         if !Path::new(&site_config.access_log).exists() {
-            error!("Site {} access log doesn't exist at {}", site_config.name, site_config.access_log);
-            return;
+            panic!("Site {} access log doesn't exist at {}", site_config.name, site_config.access_log);
         }
     }
 
     // Make sure every site has at least one host
     for site_config in &config.sites {
         if site_config.hosts.is_empty() {
-            error!("Site {} must have at least one host", site_config.name);
-            return;
+            panic!("Site {} must have at least one host", site_config.name);
         }
     }
 
