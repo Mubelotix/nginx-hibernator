@@ -13,6 +13,8 @@ You can hibernate any service that :
 curl -fsSL https://raw.githubusercontent.com/Mubelotix/nginx-hibernator/master/install.sh | sh
 ```
 
+This program cannot be installed as a docker container because it needs to interact with the host's systemd and nginx.
+
 ## Configuration
 
 <!--
