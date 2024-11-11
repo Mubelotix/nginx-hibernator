@@ -1,8 +1,6 @@
 # nginx-hibernator
 
-A simple program that detects when your sites are not used by anyone and shuts them down, and then starts them up again when they are needed.
-
-It reads nginx access logs to determine when a site is being used, and systemd to start and stop the site.
+Automatically hibernate and wake up nginx-proxied sites based on activity, reducing resource usage for idle services.
 
 You can hibernate any service that :
 - Provides an HTTP API
