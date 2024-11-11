@@ -17,6 +17,8 @@ mod server;
 use server::*;
 mod cooldown;
 use cooldown::*;
+mod pending_check;
+use pending_check::*;
 
 #[derive(Debug, Clone, Copy)]
 enum ShouldShutdown {
@@ -144,24 +146,6 @@ fn start_server(site_config: &'static SiteConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(PartialEq, Eq)]
-struct PendingCheck {
-    site_index: usize,
-    check_at: u64,
-}
-
-impl Ord for PendingCheck {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.check_at.cmp(&other.check_at).reverse()
-    }
-}
-
-impl PartialOrd for PendingCheck {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
 fn main() { 
     env_logger::init();
 
@@ -176,7 +160,7 @@ fn main() {
 
     info!("Hibernator started");
 
-    let mut check_queue: BinaryHeap<PendingCheck> = BinaryHeap::new();
+    let mut check_queue = CheckQueue::new();
     let mut now = Utc::now().timestamp() as u64;
     for site_index in 0..config.sites.len() {
         check_queue.push(PendingCheck {
