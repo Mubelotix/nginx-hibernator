@@ -1,3 +1,3 @@
 cargo build
 
-sudo ./target/debug/nginx-site-hibernator dev/config.toml
+sudo RUST_LOG=trace ./target/debug/nginx-site-hibernator dev/config.toml

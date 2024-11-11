@@ -10,6 +10,7 @@ use std::{collections::{BinaryHeap, HashMap, HashSet, VecDeque}, fmt, fs::{read_
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{de::{self, Visitor}, Deserialize, Deserializer};
 use rev_lines::RevLines;
+use log::*;
 
 mod config;
 use config::*;
@@ -208,13 +209,19 @@ impl PartialOrd for PendingCheck {
 
 
 
-fn main() {
+fn main() { 
+    env_logger::init();
+
     let config_path = std::env::args().nth(1).unwrap_or(String::from("config.toml"));
     let config_data = std::fs::read_to_string(config_path).expect("could not read config file");
     let config: Config = toml::from_str(&config_data).expect("could not parse config file");
     let config = Box::leak(Box::new(config));
 
+    info!("Starting hibernator: managing {} sites", config.sites.len());
+
     setup_server(config);
+
+    info!("Hibernator started");
 
     let mut check_queue: BinaryHeap<PendingCheck> = BinaryHeap::new();
     let now = Utc::now().timestamp() as u64;
@@ -227,15 +234,18 @@ fn main() {
 
     while let Some(PendingCheck { site_index, check_at }) = check_queue.pop() {
         let to_wait = check_at.saturating_sub(Utc::now().timestamp() as u64);
+        let site_config = &config.sites[site_index];
+        debug!("Waiting for {to_wait} seconds before checking site {}", site_config.name);
         sleep(Duration::from_secs(to_wait));
 
-        let site_config = &config.sites[site_index];
         let up = is_port_open(site_config.port);
         match up {
             true => {
+                debug!("Checking if site {} should be shut down", site_config.name);
                 let should_shutdown = should_shutdown(site_config).unwrap();
                 match should_shutdown {
                     ShouldShutdown::Now => {
+                        info!("Shutting down site {}", site_config.name);
                         shutdown_server(&config.top_level, site_config, site_index).unwrap();
                         check_queue.push(PendingCheck {
                             site_index,
@@ -243,6 +253,7 @@ fn main() {
                         });
                     },
                     ShouldShutdown::NotUntil(next_check) => {
+                        debug!("Site {} should not be shut down until {}", site_config.name, next_check);
                         check_queue.push(PendingCheck {
                             site_index,
                             check_at: next_check,
@@ -251,6 +262,8 @@ fn main() {
                 }
             },
             false => {
+                debug!("Rescheduling check for site {}", site_config.name);
+
                 check_queue.push(PendingCheck {
                     site_index,
                     check_at: now + site_config.keep_alive,
