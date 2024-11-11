@@ -5,7 +5,7 @@
 // service_name = "webserver" # The name of the service that runs the site
 // keep_alive = "5m" # Time to keep the site running after the last access
 
-use std::{cmp::max, collections::BinaryHeap, fs::{read_link, remove_file, File}, net::TcpStream, os::unix::fs::symlink, process::Command, thread::sleep, time::Duration};
+use std::{cmp::max, fs::File, thread::sleep, time::Duration};
 use chrono::{DateTime, Utc};
 use rev_lines::RevLines;
 use anyhow::anyhow;
@@ -19,6 +19,8 @@ mod cooldown;
 use cooldown::*;
 mod pending_check;
 use pending_check::*;
+mod util;
+use util::*;
 
 #[derive(Debug, Clone, Copy)]
 enum ShouldShutdown {
@@ -80,39 +82,6 @@ fn should_shutdown(config: &'static SiteConfig) -> anyhow::Result<ShouldShutdown
         debug!("Site {} should not be shut down until {next_check}", config.name);
         Ok(ShouldShutdown::NotUntil(next_check))
     }
-}
-
-fn is_port_open(port: u16) -> bool {
-    TcpStream::connect(format!("127.0.0.1:{port}")).is_ok()
-}
-
-fn checking_symlink(original: &str, link: &str) -> anyhow::Result<bool> {
-    let previous_link = read_link(link)?;
-    let expected_link = &original;
-
-    if previous_link.to_str() == Some(expected_link) {
-        return Ok(false);
-    }
-
-    // Replace nginx config with hibernator config
-    remove_file(link).map_err(|e| anyhow!("could not remove previous symlink: {e}"))?;
-    symlink(original, link).map_err(|e| anyhow!("could not create symlink: {e}"))?;
-    Ok(true)
-}
-
-fn run_command(command: &str) -> anyhow::Result<()> {
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .output()
-        .map_err(|e| anyhow!("could not run command: {e}"))?;
-    if !output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!("command failed: {command} {stdout} {stderr}"));
-    }
-
-    Ok(())
 }
 
 fn shutdown_server(config: &TopLevelConfig, site_config: &'static SiteConfig) -> anyhow::Result<()> {
