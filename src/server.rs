@@ -30,7 +30,7 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
     let host = match host {
         Some(host) => host,
         None => {
-            let status_line = "HTTP/1.1 400 Bad Request";
+            let status_line = "HTTP/1.1 500 Internal Server Error";
             let content = "Hibernator requires a Host header";
             let length = content.len();
             let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
@@ -44,7 +44,7 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
     let site_config = match site_config {
         Some(site_config) => site_config,
         None => {
-            let status_line = "HTTP/1.1 404 Not Found";
+            let status_line = "HTTP/1.1 500 Internal Server Error";
             let content = "Hibernator doesn't know about the site you're trying to access";
             let length = content.len();
             let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
