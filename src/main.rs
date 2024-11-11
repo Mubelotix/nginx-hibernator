@@ -5,7 +5,7 @@
 // service_name = "webserver" # The name of the service that runs the site
 // keep_alive = "5m" # Time to keep the site running after the last access
 
-use std::{cmp::max, fs::File, thread::sleep, time::Duration};
+use std::{cmp::max, fs::File, path::Path, thread::sleep, time::Duration};
 use chrono::{DateTime, Utc};
 use rev_lines::RevLines;
 use anyhow::anyhow;
@@ -124,6 +124,29 @@ fn main() {
     let config = Box::leak(Box::new(config));
 
     info!("Starting hibernator: managing {} sites", config.sites.len());
+
+    // Make sure the hibernator config file exists
+    let hibernator_config = config.top_level.nginx_hibernator_config();
+    if !Path::new(&hibernator_config).exists() {
+        error!("Hibernator config file doesn't exist at {}", hibernator_config);
+        return;
+    }
+
+    // Make sure every access log exists
+    for site_config in &config.sites {
+        if !Path::new(&site_config.access_log).exists() {
+            error!("Site {} access log doesn't exist at {}", site_config.name, site_config.access_log);
+            return;
+        }
+    }
+
+    // Make sure every site has at least one host
+    for site_config in &config.sites {
+        if site_config.hosts.is_empty() {
+            error!("Site {} must have at least one host", site_config.name);
+            return;
+        }
+    }
 
     setup_server(config);
 
