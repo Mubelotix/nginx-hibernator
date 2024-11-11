@@ -1,0 +1,12 @@
+# Top-level configuration options
+nginx_hibernator_config = "/etc/nginx/sites-available/hibernator"
+hibernator_port = 7878
+
+# Site-specific configuration block
+[[sites]]
+name = "python_http_proxy"
+port = 8000
+access_log = "/var/log/nginx/python_http_proxy_access.log"
+service_name = "simple_python_http"
+hosts = ["localhost", "127.0.0.1"]
+keep_alive = 30
