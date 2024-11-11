@@ -81,12 +81,22 @@ fn deserialize_duration<'de, D>(deserializer: D) -> Result<u64, D::Error> where 
     deserializer.deserialize_any(DurationString)
 }
 
+/// The proxy is a feature to reduce friction when your service's APIs are used by other programs.
+/// It makes requests wait the upstream server to boot up instead of displaying a waiting page.
+/// If the server starts in time, the request will be processed out of the box, as if the server had been running.
+/// 
+/// Note: If you are relying on nginx to authenticate users, you might want to disable this feature to avoid users bypassing the authentication.
 #[derive(Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProxyMode {
+    /// Proxies all requests.
     All,
+
+    /// Only waits for API calls, and displays a waiting page for users accessing the site through a browser.
     #[default]
     NonBrowser,
+
+    /// Disables the proxy feature.
     None,
 }
 
@@ -99,54 +109,65 @@ impl Default for ProxyTimeout {
 }
 
 #[derive(Deserialize, Debug)]
-pub struct ProxyPollInterval(pub u64);
-impl Default for ProxyPollInterval {
+pub struct ProxyCheckInterval(pub u64);
+impl Default for ProxyCheckInterval {
     fn default() -> Self {
-        ProxyPollInterval(500)
-    }
-}
-
-#[derive(Deserialize, Debug)]
-pub struct ProxyPollTimeout(pub u64);
-impl Default for ProxyPollTimeout {
-    fn default() -> Self {
-        ProxyPollTimeout(30000)
+        ProxyCheckInterval(500)
     }
 }
 
 #[derive(Debug, Deserialize)]
 pub struct SiteConfig {
+    /// The name of the site. Must be unique.
     pub name: String,
 
+    /// Path to the nginx available config file.
+    /// 
+    /// Defaults to `/etc/nginx/sites-available/{name}`.
     #[serde(default)]
     pub nginx_available_config: Option<String>,
     
+    /// Path to the nginx enabled config file.
+    /// 
+    /// Defaults to `/etc/nginx/sites-enabled/{name}`.
     #[serde(default)]
     pub nginx_enabled_config: Option<String>,
     
+    /// The port the service listens to.
+    /// Used to determine if the service is up.
     pub port: u16,
 
+    /// The path to the access log file.
+    /// Your nginx configuration must log the requests to this file.
     pub access_log: String,
-    
+
+    /// Optional filter to match lines in the access log.
+    /// Only lines containing this string will be considered.
     #[serde(default)]
     pub access_log_filter: Option<String>,
     
+    /// The name of the systemctl service that runs the site.
+    /// Commands `systemctl start` and `systemctl stop` will be run with this name.
     pub service_name: String,
 
+    /// The hostnames that the service listens to.
+    /// It's used so that the hibernator knows which site to start upon receiving a request.
     pub hosts: Vec<String>,
 
+    /// The proxy mode. See [`ProxyMode`] for more information.
     #[serde(default)]
     pub proxy_mode: ProxyMode,
 
+    /// Maximum time to wait before giving up on the proxy, in milliseconds.
     #[serde(default)]
     pub proxy_timeout_ms: ProxyTimeout,
 
+    /// Interval time to check if the proxy is up, in milliseconds.
     #[serde(default)]
-    pub proxy_poll_interval_ms: ProxyPollInterval,
+    pub proxy_check_interval_ms: ProxyCheckInterval,
 
-    #[serde(default)]
-    pub proxy_poll_timeout_ms: ProxyPollTimeout,
-
+    /// The time in seconds to keep the service running after the last request.
+    /// The service will be stopped after this time.
     #[serde(deserialize_with = "deserialize_duration")]
     pub keep_alive: u64,
 }
@@ -169,9 +190,16 @@ impl SiteConfig {
 
 #[derive(Debug, Deserialize)]
 pub struct TopLevelConfig {
+    /// Where the nginx hibernator config file is located.
+    /// 
+    /// Defaults to `/etc/nginx/sites-available/hibernator`.
     #[serde(default)]
     pub nginx_hibernator_config: Option<String>,
 
+    /// The port the hibernator listens to.
+    /// This port should never be exposed to the internet.
+    /// 
+    /// Defaults to `7878`.
     #[serde(default)]
     pub hibernator_port: Option<u16>,
 }

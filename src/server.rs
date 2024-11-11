@@ -1,4 +1,4 @@
-use std::{io::{BufRead, BufReader, Read, Write}, net::{TcpListener, TcpStream}, sync::mpsc::channel, thread::{sleep, spawn}, time::Duration};
+use std::{io::{BufRead, BufReader, Read, Write}, net::{TcpListener, TcpStream}, sync::mpsc::channel, thread::{sleep, spawn}, time::{Duration, Instant}};
 use crate::{is_port_open, start_server, Config, ProxyMode};
 use log::*;
 
@@ -78,6 +78,8 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
     }
 
     let (sender, receiver) = channel::<anyhow::Result<()>>();
+    let start_instant = Instant::now();
+    let timeout_duration = Duration::from_millis(site_config.proxy_timeout_ms.0);
     spawn(move || {
         let r = start_server(site_config);
         if let Err(e) = &r {
@@ -86,10 +88,8 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
             return;
         }
         debug!("Site started, waiting for port to open");
-        let max_polls = site_config.proxy_poll_timeout_ms.0 / site_config.proxy_poll_interval_ms.0;
-        let mut counter = 0;
         loop {
-            if counter > max_polls {
+            if start_instant.elapsed() >= timeout_duration {
                 warn!("Site {} took too long to start", site_config.name);
                 break;
             }
@@ -98,13 +98,11 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
                 let _ = sender.send(Ok(()));
                 break;
             }
-            sleep(Duration::from_millis(site_config.proxy_poll_interval_ms.0));
-            counter += 1;
+            sleep(Duration::from_millis(site_config.proxy_check_interval_ms.0));
         }
-
     });
 
-    let r = receiver.recv_timeout(Duration::from_millis(site_config.proxy_timeout_ms.0));
+    let r = receiver.recv_timeout(timeout_duration);
     match r {
         Ok(Ok(())) => {
             debug!("Connecting to target site {}", site_config.name);
