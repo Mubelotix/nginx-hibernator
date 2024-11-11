@@ -38,7 +38,7 @@ echo "[2/3] Downloading nginx-hibernator $version"
 curl --fail --location --progress-bar "$download_url" -o "/tmp/$filename"
 case $? in
     0)  ;;
-    22) echo "${red}No available binary for your system.${normal} Please build from source: https://github.com/Mubelotix/nginx-hibernator"; exit 1 ;;
+    22) echo "${red}No available binary for your system ($arch).${normal} Please build from source: https://github.com/Mubelotix/nginx-hibernator"; exit 1 ;;
     *)  echo "${red}Error: Failed to download nginx-hibernator binary${normal}"; exit 1 ;;
 esac
 
