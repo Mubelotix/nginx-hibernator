@@ -1,6 +1,5 @@
-use std::{fs::read_to_string, io::{BufRead, BufReader, Write}, net::{TcpListener, TcpStream}, thread::spawn};
-
-use crate::{start_server, Config, TopLevelConfig};
+use std::{io::{BufRead, BufReader, Write}, net::{TcpListener, TcpStream}, thread::spawn};
+use crate::{start_server, Config};
 
 pub fn setup_server(config: &'static Config) {
     let listener = TcpListener::bind(format!("127.0.0.1:{}", config.top_level.hibernator_port())).expect("Could not bind to port");
