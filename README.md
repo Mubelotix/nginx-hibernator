@@ -1,4 +1,4 @@
-# nginx-site-hibernator
+# nginx-hibernator
 
 A simple program that detects when your sites are not used by anyone and shuts them down, and then starts them up again when they are needed.
 
