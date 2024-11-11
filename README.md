@@ -4,13 +4,78 @@ A simple program that detects when your sites are not used by anyone and shuts t
 
 It reads nginx access logs to determine when a site is being used, and systemd to start and stop the site.
 
+## Configuration
+
+<!--
+Generate the following sample using this chatgpt prompt:
+
+> Generate a sample config toml including all comments and all fields
+-->
+
 ```toml
-[site]
-name = "example" # The name of the nginx site
-access_log = "/var/log/nginx/example.access.log" # The path to the access log
-access_log_filter = "example.com" # Optional filter to match lines in the access log
-service_name = "webserver" # The name of the service that runs the site
-keep_alive = "5m" # Time to keep the site running after the last access
+# Top-level configuration settings for the hibernator service
+
+# Where the nginx hibernator config file is located.
+# Defaults to "/etc/nginx/sites-available/hibernator".
+nginx_hibernator_config = "/etc/nginx/sites-available/hibernator"
+
+# The port the hibernator listens to.
+# This port should never be exposed to the internet.
+# Defaults to 7878.
+hibernator_port = 7878
+
+# List of sites to be managed by the hibernator.
+[[sites]]
+
+# The name of the site. Must be unique.
+name = "example_site"
+
+# Path to the nginx available config file.
+# Defaults to "/etc/nginx/sites-available/{name}".
+nginx_available_config = "/etc/nginx/sites-available/example_site"
+
+# Path to the nginx enabled config file.
+# Defaults to "/etc/nginx/sites-enabled/{name}".
+nginx_enabled_config = "/etc/nginx/sites-enabled/example_site"
+
+# The port the service listens to. Used to determine if the service is up.
+port = 8080
+
+# The path to the access log file.
+# Your nginx configuration must log the requests to this file.
+access_log = "/var/log/nginx/example_site_access.log"
+
+# Optional filter to match lines in the access log.
+# Only lines containing this string will be considered.
+# Example: "GET /api/"
+# access_log_filter = "GET /api/"  # Uncomment to set a filter
+
+# The name of the systemctl service that runs the site.
+# Commands like `systemctl start` and `systemctl stop` will be run with this name.
+service_name = "example_site_service"
+
+# The hostnames that the service listens to.
+# Used by the hibernator to know which site to start upon receiving a request.
+hosts = ["example.com", "www.example.com"]
+
+# The proxy mode.
+#   - "all": Proxies all requests.
+#   - "nonbrowser": Only waits for API calls and shows a waiting page for browser users.
+#   - "none": Disables the proxy feature.
+# Defaults to "nonbrowser".
+proxy_mode = "nonbrowser"
+
+# Maximum time to wait before giving up on the proxy, in milliseconds.
+# Defaults to 28000 ms (28 seconds).
+proxy_timeout_ms = 28000
+
+# Interval time to check if the proxy is up, in milliseconds.
+# Defaults to 500 ms (0.5 seconds).
+proxy_check_interval_ms = 500
+
+# The time in seconds to keep the service running after the last request.
+# The service will be stopped after this time. Example: "10m" for 10 minutes.
+keep_alive = "10m"  # Can be specified with units: s (seconds), m (minutes), h (hours), d (days)
 ```
 
 ## Security considerations
