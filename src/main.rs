@@ -205,7 +205,10 @@ fn main() {
                 };
                 match should_shutdown {
                     ShouldShutdown::Now => {
-                        shutdown_server(&config.top_level, site_config).unwrap();
+                        let r = shutdown_server(&config.top_level, site_config);
+                        if let Err(e) = r {
+                            error!("Error while shutting down site {}: {e}", site_config.name);
+                        }
                         check_queue.push(PendingCheck {
                             site_index,
                             check_at: now + site_config.keep_alive,

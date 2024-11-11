@@ -3,9 +3,9 @@ use std::{fs::read_to_string, io::{BufRead, BufReader, Write}, net::{TcpListener
 use crate::{start_server, Config, TopLevelConfig};
 
 pub fn setup_server(config: &'static Config) {
-    spawn(move || {
-        let listener = TcpListener::bind(format!("127.0.0.1:{}", config.top_level.hibernator_port())).unwrap();
+    let listener = TcpListener::bind(format!("127.0.0.1:{}", config.top_level.hibernator_port())).expect("Could not bind to port");
 
+    spawn(move || {
         for stream in listener.incoming() {
             let Ok(stream) = stream else {continue};
             spawn(move || handle_connection(stream, config));
@@ -34,7 +34,7 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
             let content = "Hibernator requires a Host header";
             let length = content.len();
             let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
-            stream.write_all(response.as_bytes()).unwrap();
+            let _ = stream.write_all(response.as_bytes());
             return;
         }
     };
@@ -48,7 +48,7 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
             let content = "Hibernator doesn't know about the site you're trying to access";
             let length = content.len();
             let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
-            stream.write_all(response.as_bytes()).unwrap();
+            let _ = stream.write_all(response.as_bytes());
             return;
         }
     };
@@ -59,8 +59,11 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
     let response = format!(
         "{status_line}\r\nContent-Length: {length}\r\n\r\n{content}"
     );
-    stream.write_all(response.as_bytes()).unwrap();
+    let _ = stream.write_all(response.as_bytes());
 
-    start_server(site_config).unwrap();
+    let r = start_server(site_config);
+    if let Err(e) = r {
+        eprintln!("Error while starting site {}: {e}", site_config.name);
+    }
 }
 
