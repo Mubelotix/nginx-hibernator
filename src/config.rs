@@ -94,6 +94,8 @@ pub struct SiteConfig {
     
     #[serde(default)]
     pub nginx_enabled_config: Option<String>,
+    
+    pub port: u16,
 
     pub access_log: String,
     

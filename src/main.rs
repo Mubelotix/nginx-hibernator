@@ -5,7 +5,7 @@
 // service_name = "webserver" # The name of the service that runs the site
 // keep_alive = "5m" # Time to keep the site running after the last access
 
-use std::{collections::{BinaryHeap, HashSet, VecDeque}, fmt, fs::File, os::unix::fs::symlink, process::Command, sync::{Arc, Mutex}, thread::sleep, time::Duration};
+use std::{collections::{BinaryHeap, HashSet, VecDeque}, fmt, fs::{read_link, File}, net::{TcpStream, UdpSocket}, os::unix::fs::symlink, process::Command, sync::{Arc, Mutex}, thread::sleep, time::Duration};
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{de::{self, Visitor}, Deserialize, Deserializer};
@@ -60,17 +60,33 @@ fn should_shutdown(config: &SiteConfig) -> anyhow::Result<ShouldShutdown> {
     }
 }
 
-fn shutdown_server(config: &TopLevelConfig, site_config: &SiteConfig) -> anyhow::Result<()> {
-    // Replace nginx config with hibernator config
-    symlink(config.nginx_hibernator_config(), site_config.nginx_enabled_config())?;
+fn is_port_open(port: u16) -> bool {
+    TcpStream::connect(format!("127.0.0.1:{port}")).is_ok()
+}
 
-    // Reload nginx
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg("nginx -s reload")
-        .status()?;
-    if !status.success() {
-        return Err(anyhow::anyhow!("nginx reload failed"));
+fn checking_symlink(original: &str, link: &str) -> anyhow::Result<bool> {
+    let previous_link = read_link(link)?;
+    let expected_link = &original;
+
+    if previous_link.to_str() == Some(expected_link) {
+        return Ok(false);
+    }
+
+    // Replace nginx config with hibernator config
+    symlink(original, link)?;
+    Ok(true)
+}
+
+fn shutdown_server(config: &TopLevelConfig, site_config: &SiteConfig) -> anyhow::Result<()> {
+    if checking_symlink(&config.nginx_hibernator_config(), &site_config.nginx_enabled_config())? {
+        // Reload nginx
+        let status = Command::new("sh")
+            .arg("-c")
+            .arg("nginx -s reload")
+            .status()?;
+        if !status.success() {
+            return Err(anyhow::anyhow!("nginx reload failed"));
+        }
     }
 
     // Shutdown the service
@@ -86,16 +102,15 @@ fn shutdown_server(config: &TopLevelConfig, site_config: &SiteConfig) -> anyhow:
 }
 
 fn start_server(config: &SiteConfig) -> anyhow::Result<()> {
-    // Replace hibernator config with nginx config
-    symlink(config.nginx_available_config(), config.nginx_enabled_config())?;
-
-    // Reload nginx
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg("nginx -s reload")
-        .status()?;
-    if !status.success() {
-        return Err(anyhow::anyhow!("nginx reload failed"));
+    if checking_symlink(&config.nginx_available_config(), &config.nginx_enabled_config())? {
+        // Reload nginx
+        let status = Command::new("sh")
+            .arg("-c")
+            .arg("nginx -s reload")
+            .status()?;
+        if !status.success() {
+            return Err(anyhow::anyhow!("nginx reload failed"));
+        }
     }
 
     // Start the service
@@ -116,6 +131,7 @@ fn test() {
         name: "example".to_string(),
         nginx_available_config: None,
         nginx_enabled_config: None,
+        port: 8000,
         access_log: "test.log".to_string(),
         access_log_filter: None,
         service_name: "webserver".to_string(),
