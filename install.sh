@@ -32,7 +32,7 @@ arch="$RETVAL"
 filename="nginx-hibernator_${arch}"
 latest_url=$(curl -sSL -w "%{url_effective}" -o /dev/null "https://github.com/Mubelotix/nginx-hibernator/releases/latest")
 version=$(echo "$latest_url" | sed 's:.*/::')
-download_url="https://github.com/mubelotix/nginx-hibernator/releases/download/$version/nginx-hibernator-$arch"
+download_url="https://github.com/mubelotix/nginx-hibernator/releases/download/$version/nginx-hibernator_$arch"
 
 echo "[2/3] Downloading nginx-hibernator $version"
 curl --fail --location --progress-bar "$download_url" -o "/tmp/$filename"
