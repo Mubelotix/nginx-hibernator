@@ -104,6 +104,8 @@ pub struct SiteConfig {
     
     pub service_name: String,
 
+    pub hosts: Vec<String>,
+
     #[serde(deserialize_with = "deserialize_duration")]
     pub keep_alive: u64,
 }
@@ -128,6 +130,9 @@ impl SiteConfig {
 pub struct TopLevelConfig {
     #[serde(default)]
     pub nginx_hibernator_config: Option<String>,
+
+    #[serde(default)]
+    pub hibernator_port: Option<u16>,
 }
 
 impl TopLevelConfig {
@@ -135,6 +140,13 @@ impl TopLevelConfig {
         match &self.nginx_hibernator_config {
             Some(config) => config.clone(),
             None => String::from("/etc/nginx/sites-available/hibernator"),
+        }
+    }
+
+    pub fn hibernator_port(&self) -> u16 {
+        match &self.hibernator_port {
+            Some(port) => *port,
+            None => 7878,
         }
     }
 }

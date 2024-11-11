@@ -13,6 +13,8 @@ use rev_lines::RevLines;
 
 mod config;
 use config::*;
+mod server;
+use server::*;
 
 fn can_be_stopped(site_index: usize) -> bool {
     static LAST_STOPPED: LazyLock<Arc<Mutex<HashMap<usize, u64>>>> = LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
@@ -174,6 +176,7 @@ fn test() {
         nginx_available_config: None,
         nginx_enabled_config: None,
         port: 8000,
+        hosts: vec![String::from("localhost")],
         access_log: "test.log".to_string(),
         access_log_filter: None,
         service_name: "webserver".to_string(),
@@ -203,10 +206,15 @@ impl PartialOrd for PendingCheck {
     }
 }
 
+
+
 fn main() {
     let config_path = std::env::args().nth(1).unwrap_or(String::from("config.toml"));
     let config_data = std::fs::read_to_string(config_path).expect("could not read config file");
     let config: Config = toml::from_str(&config_data).expect("could not parse config file");
+    let config = Box::leak(Box::new(config));
+
+    setup_server(config);
 
     let mut check_queue: BinaryHeap<PendingCheck> = BinaryHeap::new();
     let now = Utc::now().timestamp() as u64;
