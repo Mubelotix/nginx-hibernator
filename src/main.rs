@@ -5,10 +5,8 @@
 // service_name = "webserver" # The name of the service that runs the site
 // keep_alive = "5m" # Time to keep the site running after the last access
 
-use std::{cmp::max, collections::{BinaryHeap, HashMap, HashSet, VecDeque}, fmt, fs::{read_link, remove_file, File}, net::{TcpStream, UdpSocket}, os::unix::fs::symlink, process::Command, sync::{Arc, LazyLock, Mutex}, thread::sleep, time::Duration};
-
-use chrono::{DateTime, NaiveDateTime, Utc};
-use serde::{de::{self, Visitor}, Deserialize, Deserializer};
+use std::{cmp::max, collections::BinaryHeap, fs::{read_link, remove_file, File}, net::TcpStream, os::unix::fs::symlink, process::Command, thread::sleep, time::Duration};
+use chrono::{DateTime, Utc};
 use rev_lines::RevLines;
 use anyhow::anyhow;
 use log::*;
@@ -17,41 +15,8 @@ mod config;
 use config::*;
 mod server;
 use server::*;
-
-static LAST_STOPPED: LazyLock<Arc<Mutex<HashMap<&'static str, u64>>>> = LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
-
-fn get_last_stopped(site_name: &'static str) -> Option<u64> {
-    let last_stopped_table = LAST_STOPPED.lock().unwrap();
-    last_stopped_table.get(site_name).copied()
-}
-
-fn mark_stopped(site_name: &'static str) {
-    let now = Utc::now().timestamp() as u64;
-    let mut last_stopped_table = LAST_STOPPED.lock().unwrap();
-    last_stopped_table.insert(site_name, now);
-}
-
-static LAST_STARTED: LazyLock<Arc<Mutex<HashMap<&'static str, u64>>>> = LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
-
-fn get_last_started(site_name: &'static str) -> Option<u64> {
-    let last_started_table = LAST_STARTED.lock().unwrap();
-    last_started_table.get(site_name).copied()
-}
-
-fn try_mark_started(site_config: &'static SiteConfig) -> bool {
-    let now = Utc::now().timestamp() as u64;
-    let mut last_started_table = LAST_STARTED.lock().unwrap();
-    let last_started = last_started_table.get(site_config.name.as_str());
-    if let Some(last_started) = last_started {
-        if now.saturating_sub(*last_started) < site_config.keep_alive {
-            return false;
-        }
-    }
-
-    last_started_table.insert(site_config.name.as_str(), now);
-
-    true
-}
+mod cooldown;
+use cooldown::*;
 
 #[derive(Debug, Clone, Copy)]
 enum ShouldShutdown {

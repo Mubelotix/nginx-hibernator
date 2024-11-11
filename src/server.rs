@@ -13,7 +13,6 @@ pub fn setup_server(config: &'static Config) {
     });
 }
 
-
 fn handle_connection(mut stream: TcpStream, config: &'static Config) {
     let buf_reader = BufReader::new(&mut stream);
     let http_request: Vec<_> = buf_reader
