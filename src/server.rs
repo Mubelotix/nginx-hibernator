@@ -57,8 +57,17 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
     };
 
     // Fail rightaway if the client is a browser, so that it quickly displays a waiting page to the user
-    let is_browser_navigate = http_request.iter().any(|line| line.starts_with("Sec-Fetch-Mode: navigate"));
-    let should_proxy = site_config.proxy_mode == ProxyMode::None || (site_config.proxy_mode == ProxyMode::NonBrowser && is_browser_navigate);
+    let is_browser = http_request.iter().any(|line| line.starts_with("Sec-Fetch-Mode: navigate"));
+    let is_up = is_port_open(site_config.port);
+    let proxy_mode = match is_browser {
+        true => &site_config.browser_proxy_mode,
+        false => &site_config.proxy_mode,
+    };
+    let should_proxy = match proxy_mode {
+        ProxyMode::Always => true,
+        ProxyMode::WhenReady => is_up,
+        ProxyMode::Never => false,
+    };
     if !should_proxy {
         debug!("Returning 503 right away");
         let status_line = "HTTP/1.1 503 Service Unavailable";
@@ -69,7 +78,7 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
         );
         let _ = stream.write_all(response.as_bytes());
 
-        let r = start_server(site_config);
+        let r = start_server(site_config, is_up);
         if let Err(e) = &r {
             eprintln!("Error while starting site {}: {e}", site_config.name);
         }
@@ -81,7 +90,7 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
     let start_instant = Instant::now();
     let timeout_duration = Duration::from_millis(site_config.proxy_timeout_ms.0);
     spawn(move || {
-        let r = start_server(site_config);
+        let r = start_server(site_config, is_up);
         if let Err(e) = &r {
             eprintln!("Error while starting site {}: {e}", site_config.name);
             let _ = sender.send(r);

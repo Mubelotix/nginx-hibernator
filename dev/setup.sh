@@ -19,7 +19,7 @@ Description=Simple Python HTTP Server
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 -m http.server 8000
+ExecStart=/usr/bin/sh -c "sleep 5 && /usr/bin/python3 -m http.server 8000"
 WorkingDirectory=$PWD
 Restart=always
 User=$(whoami)

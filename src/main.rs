@@ -98,19 +98,26 @@ fn shutdown_server(config: &TopLevelConfig, site_config: &'static SiteConfig) ->
     Ok(())
 }
 
-fn start_server(site_config: &'static SiteConfig) -> anyhow::Result<()> {
-    if !try_mark_started(site_config) {
-        trace!("Site {} cannot be started yet (under cooldown)", site_config.name);
-        return Ok(());
+fn start_server(site_config: &'static SiteConfig, is_up: bool) -> anyhow::Result<()> {
+    match is_up {
+        true => {
+            // TODO: cooldown
+            
+            info!("Reloading nginx for {}", site_config.name);
+            if checking_symlink(&site_config.nginx_available_config(), &site_config.nginx_enabled_config())? {
+                run_command("nginx -s reload")?;
+            }
+        }
+        false => {
+            if !try_mark_started(site_config) {
+                trace!("Site {} cannot be started yet (under cooldown)", site_config.name);
+                return Ok(());
+            }
+
+            info!("Starting service {}", site_config.name);
+            run_command(&format!("systemctl start {}", site_config.service_name))?;
+        }
     }
-
-    info!("Starting site {}", site_config.name);
-
-    if checking_symlink(&site_config.nginx_available_config(), &site_config.nginx_enabled_config())? {
-        run_command("nginx -s reload")?;
-    }
-
-    run_command(&format!("systemctl start {}", site_config.service_name))?;
 
     Ok(())
 }

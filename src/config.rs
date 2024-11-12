@@ -86,18 +86,27 @@ fn deserialize_duration<'de, D>(deserializer: D) -> Result<u64, D::Error> where 
 /// If the server starts in time, the request will be processed out of the box, as if the server had been running.
 /// 
 /// Note: If you are relying on nginx to authenticate users, you might want to disable this feature to avoid users bypassing the authentication.
-#[derive(Debug, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ProxyMode {
     /// Proxies all requests.
-    All,
+    Always,
 
-    /// Only waits for API calls, and displays a waiting page for users accessing the site through a browser.
-    #[default]
-    NonBrowser,
+    /// Proxies requests only when the upstream server is ready right away.
+    WhenReady,
 
     /// Disables the proxy feature.
-    None,
+    Never,
+}
+
+impl ProxyMode {
+    fn when_ready() -> Self {
+        ProxyMode::WhenReady
+    }
+
+    fn always() -> Self {
+        ProxyMode::Always
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -155,8 +164,12 @@ pub struct SiteConfig {
     pub hosts: Vec<String>,
 
     /// The proxy mode. See [`ProxyMode`] for more information.
-    #[serde(default)]
+    #[serde(default = "ProxyMode::always")]
     pub proxy_mode: ProxyMode,
+
+    /// The proxy mode for requests isssued by browsers. See [`ProxyMode`] for more information.
+    #[serde(default = "ProxyMode::when_ready")]
+    pub browser_proxy_mode: ProxyMode,
 
     /// Maximum time to wait before giving up on the proxy, in milliseconds.
     #[serde(default)]
