@@ -58,7 +58,7 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
     };
 
     // Determine if we should attempt to proxy the request
-    let is_browser = http_request.iter().any(|line| line.starts_with("Sec-Fetch-Mode: navigate"));
+    let is_browser = http_request.iter().any(|line| line.to_lowercase() == "sec-fetch-mode: navigate");
     let is_up = is_port_open(site_config.port);
     let proxy_mode = match is_browser {
         true => &site_config.browser_proxy_mode,
