@@ -56,7 +56,7 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
         }
     };
 
-    // Fail rightaway if the client is a browser, so that it quickly displays a waiting page to the user
+    // Determine if we should attempt to proxy the request
     let is_browser = http_request.iter().any(|line| line.starts_with("Sec-Fetch-Mode: navigate"));
     let is_up = is_port_open(site_config.port);
     let proxy_mode = match is_browser {
@@ -68,6 +68,8 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
         ProxyMode::WhenReady => is_up,
         ProxyMode::Never => false,
     };
+    debug!("Is browser: {is_browser}, Is up: {is_up}, Should proxy: {should_proxy}");
+
     if !should_proxy {
         debug!("Returning 503 right away");
         let status_line = "HTTP/1.1 503 Service Unavailable";
