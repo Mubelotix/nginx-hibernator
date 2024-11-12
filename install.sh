@@ -42,7 +42,7 @@ case $? in
     *)  echo "${red}Error: Failed to download nginx-hibernator binary${normal}"; exit 1 ;;
 esac
 
-echo "[3/3] Installing nginx-hibernator at /user/local/bin/nginx-hibernator"
+echo "[3/3] Installing nginx-hibernator at /usr/local/bin/nginx-hibernator"
 sudo mv "/tmp/$filename" "/usr/local/bin/nginx-hibernator"
 chmod +x "/usr/local/bin/nginx-hibernator"
 
