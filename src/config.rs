@@ -141,6 +141,12 @@ pub struct SiteConfig {
     /// Defaults to `/etc/nginx/sites-enabled/{name}`.
     #[serde(default)]
     pub nginx_enabled_config: Option<String>,
+
+    /// Where the nginx hibernator config file is located.
+    /// 
+    /// Defaults to `/etc/nginx/sites-available/nginx-hibernator`.
+    #[serde(default)]
+    pub nginx_hibernator_config: Option<String>,
     
     /// The port the service listens to.
     /// Used to determine if the service is up.
@@ -199,16 +205,17 @@ impl SiteConfig {
             None => format!("/etc/nginx/sites-enabled/{}", self.name),
         }
     }
+
+    pub fn nginx_hibernator_config(&self) -> String {
+        match &self.nginx_hibernator_config {
+            Some(config) => config.clone(),
+            None => String::from("/etc/nginx/sites-available/nginx-hibernator"),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
 pub struct TopLevelConfig {
-    /// Where the nginx hibernator config file is located.
-    /// 
-    /// Defaults to `/etc/nginx/sites-available/hibernator`.
-    #[serde(default)]
-    pub nginx_hibernator_config: Option<String>,
-
     /// The port the hibernator listens to.
     /// This port should never be exposed to the internet.
     /// 
@@ -218,13 +225,6 @@ pub struct TopLevelConfig {
 }
 
 impl TopLevelConfig {
-    pub fn nginx_hibernator_config(&self) -> String {
-        match &self.nginx_hibernator_config {
-            Some(config) => config.clone(),
-            None => String::from("/etc/nginx/sites-available/hibernator"),
-        }
-    }
-
     pub fn hibernator_port(&self) -> u16 {
         match &self.hibernator_port {
             Some(port) => *port,

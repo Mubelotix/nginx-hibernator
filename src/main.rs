@@ -84,12 +84,12 @@ fn should_shutdown(config: &'static SiteConfig) -> anyhow::Result<ShouldShutdown
     }
 }
 
-fn shutdown_server(config: &TopLevelConfig, site_config: &'static SiteConfig) -> anyhow::Result<()> {
+fn shutdown_server(site_config: &'static SiteConfig) -> anyhow::Result<()> {
     mark_stopped(&site_config.name);
 
     info!("Shutting down site {}", site_config.name);
 
-    if checking_symlink(&config.nginx_hibernator_config(), &site_config.nginx_enabled_config())? {
+    if checking_symlink(&site_config.nginx_hibernator_config(), &site_config.nginx_enabled_config())? {
         run_command("nginx -s reload")?;
     }
 
@@ -102,7 +102,7 @@ fn start_server(site_config: &'static SiteConfig, is_up: bool) -> anyhow::Result
     match is_up {
         true => {
             // TODO: cooldown
-            
+
             info!("Reloading nginx for {}", site_config.name);
             if checking_symlink(&site_config.nginx_available_config(), &site_config.nginx_enabled_config())? {
                 run_command("nginx -s reload")?;
@@ -132,16 +132,17 @@ fn main() {
 
     info!("Starting hibernator: managing {} sites", config.sites.len());
 
-    // Make sure the hibernator config file exists
-    let hibernator_config = config.top_level.nginx_hibernator_config();
-    if !Path::new(&hibernator_config).exists() {
-        panic!("Hibernator config file doesn't exist at {}", hibernator_config);
-    }
-
     // Make sure every access log exists
     for site_config in &config.sites {
         if !Path::new(&site_config.access_log).exists() {
             panic!("Site {} access log doesn't exist at {}", site_config.name, site_config.access_log);
+        }
+    }
+
+    // Make sure every hibernator config exists
+    for site_config in &config.sites {
+        if !Path::new(&site_config.nginx_hibernator_config()).exists() {
+            panic!("Site {} hibernator config doesn't exist at {}", site_config.name, site_config.nginx_hibernator_config());
         }
     }
 
@@ -185,7 +186,7 @@ fn main() {
                 };
                 match should_shutdown {
                     ShouldShutdown::Now => {
-                        let r = shutdown_server(&config.top_level, site_config);
+                        let r = shutdown_server(site_config);
                         if let Err(e) = r {
                             error!("Error while shutting down site {}: {e}", site_config.name);
                         }
