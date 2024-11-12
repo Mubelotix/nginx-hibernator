@@ -21,6 +21,7 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
         .map(|result| result.expect("Could not read request lines"))
         .take_while(|line| !line.is_empty())
         .collect();
+    debug!("Request: {http_request:?}");
 
     let host = http_request
         .iter()
