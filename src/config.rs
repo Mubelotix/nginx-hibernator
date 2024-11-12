@@ -87,15 +87,20 @@ fn deserialize_duration<'de, D>(deserializer: D) -> Result<u64, D::Error> where 
 /// 
 /// Note: If you are relying on nginx to authenticate users, you might want to disable this feature to avoid users bypassing the authentication.
 #[derive(Debug, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ProxyMode {
     /// Proxies all requests.
+    #[serde(alias = "always")]
     Always,
 
     /// Proxies requests only when the upstream server is ready right away.
+    #[serde(alias = "when_ready")]
+    #[serde(alias = "when-ready")]
+    #[serde(alias = "if-ready")]
+    #[serde(alias = "ready")]
     WhenReady,
 
     /// Disables the proxy feature.
+    #[serde(alias = "never")]
     Never,
 }
 
