@@ -122,6 +122,34 @@ fn start_server(site_config: &'static SiteConfig, is_up: bool) -> anyhow::Result
     Ok(())
 }
 
+fn check(site_config: &'static SiteConfig) -> u64 {
+    let now = Utc::now().timestamp() as u64;
+
+    let up = is_port_open(site_config.port);
+    match up {
+        true => {
+            let should_shutdown = match should_shutdown(site_config) {
+                Ok(should_shutdown) => should_shutdown,
+                Err(err) => {
+                    error!("Error while checking site {}: {err}", site_config.name);
+                    return now + site_config.keep_alive;
+                },
+            };
+            match should_shutdown {
+                ShouldShutdown::Now => {
+                    let r = shutdown_server(site_config);
+                    if let Err(e) = r {
+                        error!("Error while shutting down site {}: {e}", site_config.name);
+                    }
+                    now + site_config.keep_alive
+                },
+                ShouldShutdown::NotUntil(next_check) => next_check,
+            }
+        },
+        false => now + site_config.keep_alive
+    }
+}
+
 fn main() { 
     env_logger::init();
 
@@ -172,43 +200,11 @@ fn main() {
         let site_config = &config.sites[site_index];
         debug!("Waiting for {to_wait} seconds before checking site {}", site_config.name);
         sleep(Duration::from_secs(to_wait));
-        now = Utc::now().timestamp() as u64;
 
-        let up = is_port_open(site_config.port);
-        match up {
-            true => {
-                let should_shutdown = match should_shutdown(site_config) {
-                    Ok(should_shutdown) => should_shutdown,
-                    Err(err) => {
-                        error!("Error while checking site {}: {err}", site_config.name);
-                        continue;
-                    },
-                };
-                match should_shutdown {
-                    ShouldShutdown::Now => {
-                        let r = shutdown_server(site_config);
-                        if let Err(e) = r {
-                            error!("Error while shutting down site {}: {e}", site_config.name);
-                        }
-                        check_queue.push(PendingCheck {
-                            site_index,
-                            check_at: now + site_config.keep_alive,
-                        });
-                    },
-                    ShouldShutdown::NotUntil(next_check) => {
-                        check_queue.push(PendingCheck {
-                            site_index,
-                            check_at: next_check,
-                        });
-                    },
-                }
-            },
-            false => {
-                check_queue.push(PendingCheck {
-                    site_index,
-                    check_at: now + site_config.keep_alive,
-                });
-            },
-        }
+        let next_check = check(site_config);
+        check_queue.push(PendingCheck {
+            site_index,
+            check_at: next_check,
+        });
     }
 }
