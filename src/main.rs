@@ -5,7 +5,7 @@
 // service_name = "webserver" # The name of the service that runs the site
 // keep_alive = "5m" # Time to keep the site running after the last access
 
-use std::{cmp::max, fs::File, path::{self, Path}, thread::sleep, time::Duration};
+use std::{cmp::max, fs::File, path::Path, thread::sleep, time::Duration};
 use chrono::{DateTime, Utc};
 use rev_lines::RevLines;
 use anyhow::anyhow;
@@ -134,7 +134,8 @@ fn shutdown_server(site_config: &'static SiteConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn start_server(site_config: &'static SiteConfig, is_up: bool) -> anyhow::Result<()> {
+fn start_server(site_config: &'static SiteConfig) -> anyhow::Result<()> {
+    let is_up = is_healthy(site_config.port);
     match is_up {
         true => {
             // TODO: cooldown
@@ -161,7 +162,7 @@ fn start_server(site_config: &'static SiteConfig, is_up: bool) -> anyhow::Result
 fn check(site_config: &'static SiteConfig) -> u64 {
     let now = Utc::now().timestamp() as u64;
 
-    let up = is_port_open(site_config.port);
+    let up = is_healthy(site_config.port);
     match up {
         true => {
             let should_shutdown = match should_shutdown(site_config) {

@@ -1,5 +1,5 @@
-use std::{fmt, ops::{Deref, DerefMut}};
-use globset::{Glob, GlobBuilder, GlobMatcher};
+use std::{fmt, ops::Deref};
+use globset::{GlobBuilder, GlobMatcher};
 use serde::{de::{self, Visitor}, Deserialize, Deserializer};
 
 fn deserialize_duration<'de, D>(deserializer: D) -> Result<u64, D::Error> where D: Deserializer<'de> {

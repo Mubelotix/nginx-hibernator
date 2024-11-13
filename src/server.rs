@@ -1,5 +1,5 @@
 use std::{io::{BufRead, BufReader, Read, Write}, net::{TcpListener, TcpStream}, sync::mpsc::channel, thread::{sleep, spawn}, time::{Duration, Instant}};
-use crate::{is_port_open, start_server, Config, ProxyMode, SiteConfig};
+use crate::{is_healthy, start_server, Config, ProxyMode, SiteConfig};
 use log::*;
 use anyhow::anyhow;
 
@@ -124,17 +124,16 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
 
     // Determine if we should attempt to proxy the request
     let is_browser = http_request.iter().any(|line| line.to_lowercase() == "sec-fetch-mode: navigate");
-    let is_up = is_port_open(site_config.port);
     let proxy_mode = match is_browser {
         true => &site_config.browser_proxy_mode,
         false => &site_config.proxy_mode,
     };
     let should_proxy = match proxy_mode {
         ProxyMode::Always => true,
-        ProxyMode::WhenReady => is_up,
+        ProxyMode::WhenReady => is_healthy(site_config.port),
         ProxyMode::Never => false,
     };
-    debug!("Is browser: {is_browser}, Is up: {is_up}, Should proxy: {should_proxy}");
+    debug!("Is browser: {is_browser}, Proxy mode: {proxy_mode:?}, Should proxy: {should_proxy}");
 
     if !should_proxy {
         debug!("Returning 503 right away");
@@ -146,7 +145,7 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
         );
         let _ = stream.write_all(response.as_bytes());
 
-        let r = start_server(site_config, is_up);
+        let r = start_server(site_config);
         if let Err(e) = &r {
             eprintln!("Error while starting site {}: {e}", site_config.name);
         }
@@ -166,7 +165,7 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
     let start_instant = Instant::now();
     let timeout_duration = Duration::from_millis(site_config.proxy_timeout_ms.0);
     spawn(move || {
-        let r = start_server(site_config, is_up);
+        let r = start_server(site_config);
         if let Err(e) = r {
             eprintln!("Error while starting site {}: {e}", site_config.name);
             let _ = sender.send(Err(e));

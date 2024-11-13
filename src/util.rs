@@ -1,8 +1,20 @@
-use std::{fs::{read_link, remove_file}, net::TcpStream, os::unix::fs::symlink, process::Command};
+use std::{fs::{read_link, remove_file}, io::{Read, Write}, net::TcpStream, os::unix::fs::symlink, process::Command};
 use anyhow::anyhow;
 
-pub fn is_port_open(port: u16) -> bool {
-    TcpStream::connect(format!("127.0.0.1:{port}")).is_ok()
+pub fn is_healthy(port: u16) -> bool {
+    fn is_healthy_inner(port: u16) -> anyhow::Result<()> {
+        let mut stream = TcpStream::connect(format!("127.0.0.1:{port}"))?;
+        stream.write_all(b"GET / HTTP/1.1\r\n\r\n")?;
+        let mut buf = [0; 1];
+        let bytes = stream.read(&mut buf)?;
+        if bytes == 0 {
+            return Err(anyhow!("No response"));
+        }
+
+        Ok(())
+    } 
+
+    is_healthy_inner(port).is_ok()
 }
 
 pub fn checking_symlink(original: &str, link: &str) -> anyhow::Result<bool> {
