@@ -1,6 +1,7 @@
 use std::{io::{BufRead, BufReader, Read, Write}, net::{TcpListener, TcpStream}, sync::mpsc::channel, thread::{sleep, spawn}, time::{Duration, Instant}};
 use crate::{is_port_open, start_server, Config, ProxyMode, SiteConfig};
 use log::*;
+use anyhow::anyhow;
 
 pub fn setup_server(config: &'static Config) {
     let listener = TcpListener::bind(format!("127.0.0.1:{}", config.top_level.hibernator_port())).expect("Could not bind to port");
@@ -42,6 +43,23 @@ fn should_be_processed(site_config: &'static SiteConfig, path: &str, real_ip: Op
     }
 
     true
+}
+
+fn try_proxy(port: u16, head: Vec<String>, body: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    let mut upstream = TcpStream::connect(format!("127.0.0.1:{port}"))?;
+
+    upstream.write_all(head.join("\r\n").as_bytes())?;
+    upstream.write_all(b"\r\n\r\n")?;
+    upstream.write_all(&body)?;
+
+    let mut response = Vec::new();
+    upstream.read_to_end(&mut response)?;
+
+    if response.is_empty() {
+        return Err(anyhow!("Empty response"));
+    }
+
+    Ok(response)
 }
 
 // It's ok to panic in this function, as it's only called in its own thread
@@ -144,25 +162,25 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
     let mut body = vec![0; content_lenght];
     stream.read_exact(&mut body).expect("Could not read request body");
 
-    let (sender, receiver) = channel::<anyhow::Result<()>>();
+    let (sender, receiver) = channel::<anyhow::Result<Vec<u8>>>();
     let start_instant = Instant::now();
     let timeout_duration = Duration::from_millis(site_config.proxy_timeout_ms.0);
     spawn(move || {
         let r = start_server(site_config, is_up);
-        if let Err(e) = &r {
+        if let Err(e) = r {
             eprintln!("Error while starting site {}: {e}", site_config.name);
-            let _ = sender.send(r);
+            let _ = sender.send(Err(e));
             return;
         }
-        debug!("Site started, waiting for port to open");
+        debug!("Site started, waiting for upstream");
         loop {
             if start_instant.elapsed() >= timeout_duration {
                 warn!("Site {} took too long to start", site_config.name);
                 break;
             }
-            if is_port_open(site_config.port) {
-                debug!("Site {} is ready", site_config.name);
-                let _ = sender.send(Ok(()));
+            if let Ok(response) = try_proxy(site_config.port, http_request.clone(), body.clone()) {
+                debug!("Site {} is ready, got response", site_config.name);
+                let _ = sender.send(Ok(response));
                 break;
             }
             sleep(Duration::from_millis(site_config.proxy_check_interval_ms.0));
@@ -171,30 +189,9 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
 
     let r = receiver.recv_timeout(timeout_duration);
     match r {
-        Ok(Ok(())) => {
-            debug!("Connecting to target site {}", site_config.name);
-            let mut upstream = match TcpStream::connect(format!("127.0.0.1:{}", site_config.port)) {
-                Ok(stream) => stream,
-                Err(_) => {
-                    warn!("Error while connecting to target site {}", site_config.name);
-
-                    let status_line = "HTTP/1.1 502 Bad Gateway";
-                    let content = "Error while connecting to site";
-                    let length = content.len();
-                    let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
-                    let _ = stream.write_all(response.as_bytes());
-                    return;
-                }
-            };
-
-            debug!("Proxying request to site {}", site_config.name);
-            upstream.write_all(http_request.join("\r\n").as_bytes()).expect("Could not write request to inner stream");
-            upstream.write_all(b"\r\n\r\n").expect("Could not write request end to inner stream");
-            upstream.write_all(&body).expect("Could not write request body to inner stream");
-
-            std::io::copy(&mut upstream, &mut stream).expect("Could not forward from downstream to upstream");
-
-            debug!("Request to site {} completed", site_config.name);
+        Ok(Ok(response)) => {
+            debug!("Returning response from upstream");
+            let _ = stream.write_all(&response);
         },
         Ok(Err(e)) => {
             let status_line = "HTTP/1.1 500 Internal Server Error";
