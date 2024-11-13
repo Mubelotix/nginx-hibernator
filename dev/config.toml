@@ -10,3 +10,5 @@ access_log = "/var/log/nginx/python_http_proxy_access.log"
 service_name = "simple_python_http"
 hosts = ["localhost", "127.0.0.1"]
 keep_alive = 30
+proxy_mode = "always"
+browser_proxy_mode = "when-ready"

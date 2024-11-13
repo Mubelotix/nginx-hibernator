@@ -118,7 +118,7 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
     match r {
         Ok(Ok(())) => {
             debug!("Connecting to target site {}", site_config.name);
-            let mut inner_stream = match TcpStream::connect(format!("127.0.0.1:{}", site_config.port)) {
+            let mut upstream = match TcpStream::connect(format!("127.0.0.1:{}", site_config.port)) {
                 Ok(stream) => stream,
                 Err(_) => {
                     warn!("Error while connecting to target site {}", site_config.name);
@@ -133,30 +133,16 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
             };
 
             debug!("Proxying request to site {}", site_config.name);
-            inner_stream.write_all(http_request.join("\r\n").as_bytes()).expect("Could not write request to inner stream");
-            inner_stream.write_all(b"\r\n\r\n").expect("Could not write request end to inner stream");
+            upstream.write_all(http_request.join("\r\n").as_bytes()).expect("Could not write request to inner stream");
+            upstream.write_all(b"\r\n\r\n").expect("Could not write request end to inner stream");
 
             let mut stream2 = stream.try_clone().expect("Could not clone stream");
-            let mut inner_stream2 = inner_stream.try_clone().expect("Could not clone inner stream");
+            let mut upstream2 = upstream.try_clone().expect("Could not clone inner stream");
             spawn(move || {
-                let mut buf = [0; 8000];
-                loop {
-                    let Ok(bytes_read) = stream2.read(&mut buf) else {break};
-                    if bytes_read == 0 {
-                        break;
-                    }
-                    inner_stream2.write_all(&buf[..bytes_read]).expect("Could not write to inner stream");
-                }
+                std::io::copy(&mut upstream2, &mut stream2).expect("Could not forward from upstream to downstream");
             });
 
-            let mut buf = [0; 8000];
-            loop {
-                let Ok(bytes_read) = inner_stream.read(&mut buf) else {break};
-                if bytes_read == 0 {
-                    break;
-                }
-                stream.write_all(&buf[..bytes_read]).expect("Could not write to stream");
-            }
+            std::io::copy(&mut stream, &mut upstream).expect("Could not forward from downstream to upstream");
 
             debug!("Request to site {} completed", site_config.name);
         },
