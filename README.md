@@ -100,6 +100,13 @@ If you are using nginx to restrict access to pages, please note that unless you 
 
 If your service handles authentication by itself, you are fine keeping the default.
 
+### Code execution and XSS
+
+The content of the config file is not sanitized.
+**Do not rely on user input to generate the config file.**
+
+Malicious configurations could trigger code execution as root, and XSS injections in waiting pages.
+
 ### Malware
 
 This program needs to run as root. Hence, I have kept the dependencies to a minimum. Here is the dependency tree :

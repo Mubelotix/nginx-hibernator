@@ -1,4 +1,5 @@
-use std::fmt;
+use std::{fmt, ops::{Deref, DerefMut}};
+use globset::{Glob, GlobBuilder, GlobMatcher};
 use serde::{de::{self, Visitor}, Deserialize, Deserializer};
 
 fn deserialize_duration<'de, D>(deserializer: D) -> Result<u64, D::Error> where D: Deserializer<'de> {
@@ -130,6 +131,38 @@ impl Default for ProxyCheckInterval {
     }
 }
 
+pub struct GlobWrapper(pub GlobMatcher);
+impl<'de> Deserialize<'de> for GlobWrapper {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
+        let s = String::deserialize(deserializer)?;
+
+        let glob = GlobBuilder::new(&s)
+            .case_insensitive(false)
+            .literal_separator(true)
+            .backslash_escape(true)
+            .empty_alternates(true)
+            .build()
+            .map_err(de::Error::custom)?
+            .compile_matcher();
+
+        Ok(GlobWrapper(glob))
+    }
+}
+
+impl fmt::Debug for GlobWrapper {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl Deref for GlobWrapper {
+    type Target = GlobMatcher;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct SiteConfig {
     /// The name of the site. Must be unique.
@@ -189,6 +222,30 @@ pub struct SiteConfig {
     /// Interval time to check if the proxy is up, in milliseconds.
     #[serde(default)]
     pub proxy_check_interval_ms: ProxyCheckInterval,
+
+    /// List of glob patterns to match the paths that should NOT count as activity.
+    /// Requests to these paths will NOT reset the keep-alive timer and will NOT wake up the service.
+    #[serde(default)]
+    #[serde(alias = "blacklisted_paths")]
+    #[serde(alias = "path_blacklist")]
+    #[serde(alias = "path_denylist")]
+    pub blacklist_paths: Option<Vec<GlobWrapper>>,
+
+    /// List of IP prefixes that should NOT count as activity.
+    /// Requests from these IPs will NOT reset the keep-alive timer and will NOT wake up the service.
+    #[serde(default)]
+    #[serde(alias = "blacklisted_ips")]
+    #[serde(alias = "ip_blacklist")]
+    #[serde(alias = "ip_denylist")]
+    pub blacklist_ips: Option<Vec<String>>,
+
+    /// List of IP prefixes that are allowed to wake up the service.
+    /// All other IPs will not count as activity.
+    #[serde(default)]
+    #[serde(alias = "whitelisted_ips")]
+    #[serde(alias = "ip_whitelist")]
+    #[serde(alias = "ip_allowlist")]
+    pub whitelist_ips: Option<Vec<String>>,
 
     /// The time in seconds to keep the service running after the last request.
     /// The service will be stopped after this time.

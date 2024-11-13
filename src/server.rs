@@ -1,5 +1,5 @@
 use std::{io::{BufRead, BufReader, Read, Write}, net::{TcpListener, TcpStream}, sync::mpsc::channel, thread::{sleep, spawn}, time::{Duration, Instant}};
-use crate::{is_port_open, start_server, Config, ProxyMode};
+use crate::{is_port_open, start_server, Config, ProxyMode, SiteConfig};
 use log::*;
 
 pub fn setup_server(config: &'static Config) {
@@ -11,6 +11,37 @@ pub fn setup_server(config: &'static Config) {
             spawn(move || handle_connection(stream, config));
         }
     });
+}
+
+fn should_be_processed(site_config: &'static SiteConfig, path: &str, real_ip: Option<&str>) -> bool {
+    if let Some(blacklist_paths) = &site_config.blacklist_paths {
+        for blacklist_path in blacklist_paths {
+            if blacklist_path.is_match(path) {
+                return false;
+            }
+        }
+    }
+
+    if let Some(blacklist_ips) = &site_config.blacklist_ips {
+        let real_ip = real_ip.unwrap();
+        for blacklist_ip in blacklist_ips {
+            if real_ip.starts_with(blacklist_ip) {
+                return false;
+            }
+        }
+    }
+
+    if let Some(whitelist_ips) = &site_config.whitelist_ips {
+        let real_ip = real_ip.unwrap();
+        for whitelist_ip in whitelist_ips {
+            if real_ip.starts_with(whitelist_ip) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    true
 }
 
 // It's ok to panic in this function, as it's only called in its own thread
@@ -43,7 +74,6 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
     };
 
     let site_config = config.sites.iter().find(|site| site.hosts.contains(&host));
-
     let site_config = match site_config {
         Some(site_config) => site_config,
         None => {
@@ -56,6 +86,23 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
             return;
         }
     };
+
+    // Make sure the request should be treated
+    let first_line = http_request.first().expect("Request is empty");
+    let path = first_line.split_whitespace().nth(1).expect("Request line is empty");
+    let real_ip = http_request
+        .iter()
+        .find(|line| line.to_lowercase().starts_with("x-real-ip: "))
+        .map(|line| &line[11..]);
+    if !should_be_processed(site_config, path, real_ip) {
+        debug!("Client shall not be served");
+        let status_line = "HTTP/1.1 503 Service Unavailable";
+        let content = "Server is unavailable";
+        let length = content.len();
+        let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
+        let _ = stream.write_all(response.as_bytes());
+        return;
+    }
 
     // Determine if we should attempt to proxy the request
     let is_browser = http_request.iter().any(|line| line.to_lowercase() == "sec-fetch-mode: navigate");

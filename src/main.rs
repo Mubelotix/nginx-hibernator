@@ -181,6 +181,22 @@ fn main() {
         }
     }
 
+    // Make sure a site doesn't have blacklist_ips and whitelist_ips at the same time
+    for site_config in &config.sites {
+        if site_config.blacklist_ips.is_some() && site_config.whitelist_ips.is_some() {
+            panic!("Site {} cannot have both blacklist_ips and whitelist_ips", site_config.name);
+        }
+    }
+
+    // Make sure the whitelists are not empty if they exist
+    for site_config in &config.sites {
+        if let Some(whitelist_ips) = &site_config.whitelist_ips {
+            if whitelist_ips.is_empty() {
+                panic!("Site {} whitelist_ips cannot be empty", site_config.name);
+            }
+        }
+    }
+
     setup_server(config);
 
     info!("Hibernator started");

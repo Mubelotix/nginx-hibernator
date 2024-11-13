@@ -12,3 +12,7 @@ hosts = ["localhost", "127.0.0.1"]
 keep_alive = 30
 proxy_mode = "always"
 browser_proxy_mode = "when-ready"
+path_denylist = [
+    "/unimportant",
+    "**/*.rs"
+]
