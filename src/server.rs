@@ -136,6 +136,14 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
         return;
     }
 
+    let content_lenght = http_request
+        .iter()
+        .find(|line| line.to_lowercase().starts_with("content-length: "))
+        .map(|line| line[16..].parse::<usize>().expect("Could not parse content length"))
+        .unwrap_or(0);
+    let mut body = vec![0; content_lenght];
+    stream.read_exact(&mut body).expect("Could not read request body");
+
     let (sender, receiver) = channel::<anyhow::Result<()>>();
     let start_instant = Instant::now();
     let timeout_duration = Duration::from_millis(site_config.proxy_timeout_ms.0);
@@ -182,14 +190,9 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
             debug!("Proxying request to site {}", site_config.name);
             upstream.write_all(http_request.join("\r\n").as_bytes()).expect("Could not write request to inner stream");
             upstream.write_all(b"\r\n\r\n").expect("Could not write request end to inner stream");
+            upstream.write_all(&body).expect("Could not write request body to inner stream");
 
-            let mut stream2 = stream.try_clone().expect("Could not clone stream");
-            let mut upstream2 = upstream.try_clone().expect("Could not clone inner stream");
-            spawn(move || {
-                std::io::copy(&mut upstream2, &mut stream2).expect("Could not forward from upstream to downstream");
-            });
-
-            std::io::copy(&mut stream, &mut upstream).expect("Could not forward from downstream to upstream");
+            std::io::copy(&mut upstream, &mut stream).expect("Could not forward from downstream to upstream");
 
             debug!("Request to site {} completed", site_config.name);
         },
