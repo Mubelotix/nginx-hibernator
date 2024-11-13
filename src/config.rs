@@ -227,25 +227,27 @@ pub struct SiteConfig {
     /// Requests to these paths will NOT reset the keep-alive timer and will NOT wake up the service.
     #[serde(default)]
     #[serde(alias = "blacklisted_paths")]
-    #[serde(alias = "path_blacklist")]
+    #[serde(alias = "blacklist_paths")]
     #[serde(alias = "path_denylist")]
-    pub blacklist_paths: Option<Vec<GlobWrapper>>,
+    pub path_blacklist: Option<Vec<GlobWrapper>>,
 
     /// List of IP prefixes that should NOT count as activity.
     /// Requests from these IPs will NOT reset the keep-alive timer and will NOT wake up the service.
     #[serde(default)]
     #[serde(alias = "blacklisted_ips")]
-    #[serde(alias = "ip_blacklist")]
+    #[serde(alias = "blacklist_ips")]
     #[serde(alias = "ip_denylist")]
-    pub blacklist_ips: Option<Vec<String>>,
+    pub ip_blacklist: Option<Vec<String>>,
 
     /// List of IP prefixes that are allowed to wake up the service.
     /// All other IPs will not count as activity.
     #[serde(default)]
     #[serde(alias = "whitelisted_ips")]
-    #[serde(alias = "ip_whitelist")]
+    #[serde(alias = "whitelist_ips")]
     #[serde(alias = "ip_allowlist")]
-    pub whitelist_ips: Option<Vec<String>>,
+    pub ip_whitelist: Option<Vec<String>>,
+
+    // TODO: user-agent filters
 
     /// The time in seconds to keep the service running after the last request.
     /// The service will be stopped after this time.

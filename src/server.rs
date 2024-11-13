@@ -14,7 +14,7 @@ pub fn setup_server(config: &'static Config) {
 }
 
 fn should_be_processed(site_config: &'static SiteConfig, path: &str, real_ip: Option<&str>) -> bool {
-    if let Some(blacklist_paths) = &site_config.blacklist_paths {
+    if let Some(blacklist_paths) = &site_config.path_blacklist {
         for blacklist_path in blacklist_paths {
             if blacklist_path.is_match(path) {
                 return false;
@@ -22,7 +22,7 @@ fn should_be_processed(site_config: &'static SiteConfig, path: &str, real_ip: Op
         }
     }
 
-    if let Some(blacklist_ips) = &site_config.blacklist_ips {
+    if let Some(blacklist_ips) = &site_config.ip_blacklist {
         let real_ip = real_ip.unwrap();
         for blacklist_ip in blacklist_ips {
             if real_ip.starts_with(blacklist_ip) {
@@ -31,7 +31,7 @@ fn should_be_processed(site_config: &'static SiteConfig, path: &str, real_ip: Op
         }
     }
 
-    if let Some(whitelist_ips) = &site_config.whitelist_ips {
+    if let Some(whitelist_ips) = &site_config.ip_whitelist {
         let real_ip = real_ip.unwrap();
         for whitelist_ip in whitelist_ips {
             if real_ip.starts_with(whitelist_ip) {

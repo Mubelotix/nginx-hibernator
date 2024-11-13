@@ -5,7 +5,7 @@
 // service_name = "webserver" # The name of the service that runs the site
 // keep_alive = "5m" # Time to keep the site running after the last access
 
-use std::{cmp::max, fs::File, path::Path, thread::sleep, time::Duration};
+use std::{cmp::max, fs::File, path::{self, Path}, thread::sleep, time::Duration};
 use chrono::{DateTime, Utc};
 use rev_lines::RevLines;
 use anyhow::anyhow;
@@ -34,15 +34,51 @@ fn should_shutdown(config: &'static SiteConfig) -> anyhow::Result<ShouldShutdown
     // Find the last line of the file
     let file = File::open(&config.access_log).map_err(|e| anyhow!("could not open access log: {e}"))?;
     let mut rev_lines = RevLines::new(file);
-    let last_line = loop {
+    let last_line = 'line: loop {
         let potential_last_line = rev_lines.next().ok_or(anyhow!("no more lines in access log"))??;
         if let Some(filter) = &config.access_log_filter {
-            if potential_last_line.contains(filter) {
-                break potential_last_line;
+            if !potential_last_line.contains(filter) {
+                continue 'line;
             }
-        } else {
-            break potential_last_line;
         }
+
+        if let Some(ip_blacklist) = &config.ip_blacklist {
+            for ip_blacklist in ip_blacklist {
+                if potential_last_line.starts_with(ip_blacklist) {
+                    continue 'line;
+                }
+            }
+        }
+
+        if let Some(ip_whitelist) = &config.ip_whitelist {
+            let mut found = false;
+            for ip_whitelist in ip_whitelist {
+                if potential_last_line.starts_with(ip_whitelist) {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                continue 'line;
+            }
+        }
+
+        if let Some(path_blacklist) = &config.path_blacklist {
+            let path = potential_last_line.find('"').ok_or(anyhow!("no path container opening quote in last line"))?;
+            let mut potential_path_container = &potential_last_line[path + 1..];
+            let end_path = potential_path_container.find('"').ok_or(anyhow!("no path container closing quote in last line"))?;
+            potential_path_container = &potential_path_container[..end_path];
+            
+            let potential_path = potential_path_container.split(' ').nth(1).ok_or(anyhow!("no path in last line"))?;
+
+            for path_blacklist in path_blacklist {
+                if path_blacklist.is_match(potential_path) {
+                    continue 'line;
+                }
+            }
+        }
+
+        break potential_last_line;
     };
     let mut last_line = last_line.as_str();
     
@@ -183,14 +219,14 @@ fn main() {
 
     // Make sure a site doesn't have blacklist_ips and whitelist_ips at the same time
     for site_config in &config.sites {
-        if site_config.blacklist_ips.is_some() && site_config.whitelist_ips.is_some() {
+        if site_config.ip_blacklist.is_some() && site_config.ip_whitelist.is_some() {
             panic!("Site {} cannot have both blacklist_ips and whitelist_ips", site_config.name);
         }
     }
 
     // Make sure the whitelists are not empty if they exist
     for site_config in &config.sites {
-        if let Some(whitelist_ips) = &site_config.whitelist_ips {
+        if let Some(whitelist_ips) = &site_config.ip_whitelist {
             if whitelist_ips.is_empty() {
                 panic!("Site {} whitelist_ips cannot be empty", site_config.name);
             }
