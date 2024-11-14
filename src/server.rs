@@ -1,15 +1,18 @@
-use std::{io::{BufRead, BufReader, Read, Write}, net::{TcpListener, TcpStream}, sync::mpsc::channel, thread::{sleep, spawn}, time::{Duration, Instant}};
+use std::time::Duration;
 use crate::{is_healthy, start_server, Config, ProxyMode, SiteConfig};
 use log::*;
 use anyhow::anyhow;
+use tokio::{io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader}, net::{TcpListener, TcpStream}, spawn, time::{sleep, timeout}};
+use tokio_stream::{wrappers::LinesStream, StreamExt};
 
-pub fn setup_server(config: &'static Config) {
-    let listener = TcpListener::bind(format!("127.0.0.1:{}", config.top_level.hibernator_port())).expect("Could not bind to port");
+pub async fn setup_server(config: &'static Config) {
+    let listener = TcpListener::bind(format!("127.0.0.1:{}", config.top_level.hibernator_port())).await.expect("Could not bind to port");
 
-    spawn(move || {
-        for stream in listener.incoming() {
-            let Ok(stream) = stream else {continue};
-            spawn(move || handle_connection(stream, config));
+    spawn(async move {
+        loop {
+            if let Ok((stream, _addr)) = listener.accept().await {
+                spawn(handle_connection(stream, config));
+            }
         }
     });
 }
@@ -45,15 +48,15 @@ fn should_be_processed(site_config: &'static SiteConfig, path: &str, real_ip: Op
     true
 }
 
-fn try_proxy(port: u16, head: Vec<String>, body: Vec<u8>) -> anyhow::Result<Vec<u8>> {
-    let mut upstream = TcpStream::connect(format!("127.0.0.1:{port}"))?;
+async fn try_proxy(port: u16, head: Vec<String>, body: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    let mut upstream = TcpStream::connect(format!("127.0.0.1:{port}")).await?;
 
-    upstream.write_all(head.join("\r\n").as_bytes())?;
-    upstream.write_all(b"\r\n\r\n")?;
-    upstream.write_all(&body)?;
+    upstream.write_all(head.join("\r\n").as_bytes()).await?;
+    upstream.write_all(b"\r\n\r\n").await?;
+    upstream.write_all(&body).await?;
 
     let mut response = Vec::new();
-    upstream.read_to_end(&mut response)?;
+    upstream.read_to_end(&mut response).await?;
 
     if response.is_empty() {
         return Err(anyhow!("Empty response"));
@@ -63,13 +66,13 @@ fn try_proxy(port: u16, head: Vec<String>, body: Vec<u8>) -> anyhow::Result<Vec<
 }
 
 // It's ok to panic in this function, as it's only called in its own thread
-fn handle_connection(mut stream: TcpStream, config: &'static Config) {
+async fn handle_connection(mut stream: TcpStream, config: &'static Config) {
     let buf_reader = BufReader::new(&mut stream);
-    let http_request: Vec<_> = buf_reader
-        .lines()
+    let http_request: Vec<_> = LinesStream::new(buf_reader.lines())
         .map(|result| result.expect("Could not read request lines"))
         .take_while(|line| !line.is_empty())
-        .collect();
+        .collect()
+        .await;
     debug!("Request: {http_request:?}");
 
     let host = http_request
@@ -86,7 +89,7 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
             let content = "Hibernator requires a Host header";
             let length = content.len();
             let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
-            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(response.as_bytes()).await;
             return;
         }
     };
@@ -100,7 +103,7 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
             let content = "Hibernator doesn't know about the site you're trying to access";
             let length = content.len();
             let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
-            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(response.as_bytes()).await;
             return;
         }
     };
@@ -118,7 +121,7 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
         let content = "Server is unavailable";
         let length = content.len();
         let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
-        let _ = stream.write_all(response.as_bytes());
+        let _ = stream.write_all(response.as_bytes()).await;
         return;
     }
 
@@ -130,7 +133,7 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
     };
     let should_proxy = match proxy_mode {
         ProxyMode::Always => true,
-        ProxyMode::WhenReady => is_healthy(site_config.port),
+        ProxyMode::WhenReady => is_healthy(site_config.port).await,
         ProxyMode::Never => false,
     };
     debug!("Is browser: {is_browser}, Proxy mode: {proxy_mode:?}, Should proxy: {should_proxy}");
@@ -143,9 +146,9 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
         let response = format!(
             "{status_line}\r\nContent-Length: {length}\r\n\r\n{content}"
         );
-        let _ = stream.write_all(response.as_bytes());
+        let _ = stream.write_all(response.as_bytes()).await;
 
-        let r = start_server(site_config);
+        let r = start_server(site_config).await;
         if let Err(e) = &r {
             eprintln!("Error while starting site {}: {e}", site_config.name);
         }
@@ -159,45 +162,36 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
         .map(|line| line[16..].parse::<usize>().expect("Could not parse content length"))
         .unwrap_or(0);
     let mut body = vec![0; content_lenght];
-    stream.read_exact(&mut body).expect("Could not read request body");
+    stream.read_exact(&mut body).await.expect("Could not read request body");
 
-    let (sender, receiver) = channel::<anyhow::Result<Vec<u8>>>();
-    let start_instant = Instant::now();
     let timeout_duration = Duration::from_millis(site_config.proxy_timeout_ms.0);
-    spawn(move || {
-        let r = start_server(site_config);
+    let r = timeout(timeout_duration, async move {
+        let r = start_server(site_config).await;
         if let Err(e) = r {
             eprintln!("Error while starting site {}: {e}", site_config.name);
-            let _ = sender.send(Err(e));
-            return;
+            return Err(e);
         }
         debug!("Site started, waiting for upstream");
         loop {
-            if start_instant.elapsed() >= timeout_duration {
-                warn!("Site {} took too long to start", site_config.name);
-                break;
-            }
-            if let Ok(response) = try_proxy(site_config.port, http_request.clone(), body.clone()) {
+            if let Ok(response) = try_proxy(site_config.port, http_request.clone(), body.clone()).await {
                 debug!("Site {} is ready, got response", site_config.name);
-                let _ = sender.send(Ok(response));
-                break;
+                return Ok(response);
             }
-            sleep(Duration::from_millis(site_config.proxy_check_interval_ms.0));
+            sleep(Duration::from_millis(site_config.proxy_check_interval_ms.0)).await;
         }
-    });
+    }).await;
 
-    let r = receiver.recv_timeout(timeout_duration);
     match r {
         Ok(Ok(response)) => {
             debug!("Returning response from upstream");
-            let _ = stream.write_all(&response);
+            let _ = stream.write_all(&response).await;
         },
         Ok(Err(e)) => {
             let status_line = "HTTP/1.1 500 Internal Server Error";
             let content = "Error while starting site";
             let length = content.len();
             let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
-            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(response.as_bytes()).await;
         },
         Err(_) => {
             debug!("Site {} took too long to start", site_config.name);
@@ -206,7 +200,7 @@ fn handle_connection(mut stream: TcpStream, config: &'static Config) {
             let content = "Site is booting up. Try again.";
             let length = content.len();
             let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
-            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(response.as_bytes()).await;
         },
     }
 }

@@ -5,11 +5,11 @@
 // service_name = "webserver" # The name of the service that runs the site
 // keep_alive = "5m" # Time to keep the site running after the last access
 
-use std::{cmp::max, fs::File, path::Path, thread::sleep, time::Duration};
+use std::{cmp::max, path::Path, time::Duration};
 use chrono::{DateTime, Utc};
-use rev_lines::RevLines;
 use anyhow::anyhow;
 use log::*;
+use tokio::{fs::read_to_string, spawn, time::sleep};
 
 mod config;
 use config::*;
@@ -17,8 +17,6 @@ mod server;
 use server::*;
 mod cooldown;
 use cooldown::*;
-mod pending_check;
-use pending_check::*;
 mod util;
 use util::*;
 
@@ -28,14 +26,15 @@ enum ShouldShutdown {
     NotUntil(u64),
 }
 
-fn should_shutdown(config: &'static SiteConfig) -> anyhow::Result<ShouldShutdown> {
+async fn should_shutdown(config: &'static SiteConfig) -> anyhow::Result<ShouldShutdown> {
     debug!("Checking if site {} should be shut down", config.name);
 
     // Find the last line of the file
-    let file = File::open(&config.access_log).map_err(|e| anyhow!("could not open access log: {e}"))?;
-    let mut rev_lines = RevLines::new(file);
-    let last_line = 'line: loop {
-        let potential_last_line = rev_lines.next().ok_or(anyhow!("no more lines in access log"))??;
+    let content = read_to_string(&config.access_log).await.map_err(|e| anyhow!("could not read access log: {e}"))?;
+    let lines = content.lines();
+    let mut rev_lines = lines.rev(); // FIXME: It would be more efficient to use rev_lines but it's not async-compatible
+    let mut last_line = 'line: loop {
+        let potential_last_line = rev_lines.next().ok_or(anyhow!("no more lines in access log"))?;
         if let Some(filter) = &config.access_log_filter {
             if !potential_last_line.contains(filter) {
                 continue 'line;
@@ -80,7 +79,6 @@ fn should_shutdown(config: &'static SiteConfig) -> anyhow::Result<ShouldShutdown
 
         break potential_last_line;
     };
-    let mut last_line = last_line.as_str();
     
     // Parse the date of the last request
     let last_request = loop {
@@ -99,11 +97,11 @@ fn should_shutdown(config: &'static SiteConfig) -> anyhow::Result<ShouldShutdown
     // Calculate the last action timestamp
     let mut last_action = last_request.timestamp() as u64;
     trace!("Last request was at {}", last_action);
-    if let Some(last_started) = get_last_started(&config.name) {
+    if let Some(last_started) = get_last_started(&config.name).await {
         trace!("Last started was at {}", last_started);
         last_action = max(last_action, last_started);
     }
-    if let Some(last_stopped) = get_last_stopped(&config.name) {
+    if let Some(last_stopped) = get_last_stopped(&config.name).await {
         trace!("Last stopped was at {}", last_stopped);
         last_action = max(last_action, last_stopped);
     }
@@ -120,52 +118,52 @@ fn should_shutdown(config: &'static SiteConfig) -> anyhow::Result<ShouldShutdown
     }
 }
 
-fn shutdown_server(site_config: &'static SiteConfig) -> anyhow::Result<()> {
-    mark_stopped(&site_config.name);
+async fn shutdown_server(site_config: &'static SiteConfig) -> anyhow::Result<()> {
+    mark_stopped(&site_config.name).await;
 
     info!("Shutting down site {}", site_config.name);
 
-    if checking_symlink(&site_config.nginx_hibernator_config(), &site_config.nginx_enabled_config())? {
-        run_command("nginx -s reload")?;
+    if checking_symlink(&site_config.nginx_hibernator_config(), &site_config.nginx_enabled_config()).await? {
+        run_command("nginx -s reload").await?;
     }
 
-    run_command(&format!("systemctl stop {}", site_config.service_name))?;
+    run_command(&format!("systemctl stop {}", site_config.service_name)).await?;
 
     Ok(())
 }
 
-fn start_server(site_config: &'static SiteConfig) -> anyhow::Result<()> {
-    let is_up = is_healthy(site_config.port);
+async fn start_server(site_config: &'static SiteConfig) -> anyhow::Result<()> {
+    let is_up = is_healthy(site_config.port).await;
     match is_up {
         true => {
             // TODO: cooldown
 
             info!("Reloading nginx for {}", site_config.name);
-            if checking_symlink(&site_config.nginx_available_config(), &site_config.nginx_enabled_config())? {
-                run_command("nginx -s reload")?;
+            if checking_symlink(&site_config.nginx_available_config(), &site_config.nginx_enabled_config()).await? {
+                run_command("nginx -s reload").await?;
             }
         }
         false => {
-            if !try_mark_started(site_config) {
+            if !try_mark_started(site_config).await {
                 trace!("Site {} cannot be started yet (under cooldown)", site_config.name);
                 return Ok(());
             }
 
             info!("Starting service {}", site_config.name);
-            run_command(&format!("systemctl start {}", site_config.service_name))?;
+            run_command(&format!("systemctl start {}", site_config.service_name)).await?;
         }
     }
 
     Ok(())
 }
 
-fn check(site_config: &'static SiteConfig) -> u64 {
+async fn check(site_config: &'static SiteConfig) -> u64 {
     let now = Utc::now().timestamp() as u64;
 
-    let up = is_healthy(site_config.port);
+    let up = is_healthy(site_config.port).await;
     match up {
         true => {
-            let should_shutdown = match should_shutdown(site_config) {
+            let should_shutdown = match should_shutdown(site_config).await {
                 Ok(should_shutdown) => should_shutdown,
                 Err(err) => {
                     error!("Error while checking site {}: {err}", site_config.name);
@@ -174,7 +172,7 @@ fn check(site_config: &'static SiteConfig) -> u64 {
             };
             match should_shutdown {
                 ShouldShutdown::Now => {
-                    let r = shutdown_server(site_config);
+                    let r = shutdown_server(site_config).await;
                     if let Err(e) = r {
                         error!("Error while shutting down site {}: {e}", site_config.name);
                     }
@@ -187,7 +185,21 @@ fn check(site_config: &'static SiteConfig) -> u64 {
     }
 }
 
-fn main() { 
+async fn handle_site(_top_level_config: &'static TopLevelConfig, site_config: &'static SiteConfig) {
+    let mut next_check: u64 = 0;
+
+    loop {
+        let now = Utc::now().timestamp() as u64;
+        let to_wait = next_check.saturating_sub(now);
+        debug!("Waiting for {to_wait} seconds before checking site {}", site_config.name);
+        sleep(Duration::from_secs(to_wait)).await;
+        
+        next_check = check(site_config).await;
+    }
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() { 
     env_logger::init();
 
     let config_path = std::env::args().nth(1).unwrap_or(String::from("config.toml"));
@@ -234,30 +246,19 @@ fn main() {
         }
     }
 
-    setup_server(config);
+    setup_server(config).await;
 
     info!("Hibernator started");
 
-    let mut check_queue = CheckQueue::new();
-    let mut now = Utc::now().timestamp() as u64;
-    for site_index in 0..config.sites.len() {
-        check_queue.push(PendingCheck {
-            site_index,
-            check_at: now,
-        });
+    // Start all site tasks
+    let mut handles = Vec::new();
+    for site_config in &config.sites {
+        let handle = spawn(handle_site(&config.top_level, site_config));
+        handles.push(handle);
     }
 
-    while let Some(PendingCheck { site_index, check_at }) = check_queue.pop() {
-        now = Utc::now().timestamp() as u64;
-        let to_wait = check_at.saturating_sub(now);
-        let site_config = &config.sites[site_index];
-        debug!("Waiting for {to_wait} seconds before checking site {}", site_config.name);
-        sleep(Duration::from_secs(to_wait));
-
-        let next_check = check(site_config);
-        check_queue.push(PendingCheck {
-            site_index,
-            check_at: next_check,
-        });
+    // Join all handles
+    for handle in handles {
+        let _  = handle.await;
     }
 }
