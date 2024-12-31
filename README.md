@@ -178,3 +178,7 @@ nginx-hibernator v0.1.0 (/home/mubelotix/projects/nginx-site-hibernator)
 
 You might get the hibernator to run as non-root using sudo's command whitelist feature. This might require forking the project to add "sudo" in front of the commands.
 </details>
+
+## Alternatives
+
+The only known alternative is [GoDoxy](https://github.com/yusing/go-proxy?tab=readme-ov-file#idlesleeper). Unfortunately, this requires you to ditch nginx entirely for a less-mature proxy, and only supports docker containers rather than any systemd service.
