@@ -1,5 +1,5 @@
 use std::time::Duration;
-use crate::{is_healthy, start_server, Config, ProxyMode, SiteConfig};
+use crate::{get_controller, is_healthy, Config, ProxyMode, SiteConfig};
 use log::*;
 use anyhow::anyhow;
 use tokio::{io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader}, net::{TcpListener, TcpStream}, spawn, time::{sleep, timeout}};
@@ -94,13 +94,13 @@ async fn handle_connection(mut stream: TcpStream, config: &'static Config) {
         }
     };
 
-    let site_config = config.sites.iter().find(|site| site.hosts.contains(&host));
-    let site_config = match site_config {
-        Some(site_config) => site_config,
+    let controller = get_controller(&host);
+    let controller = match controller {
+        Some(controller) => controller,
         None => {
-            debug!("Client requested a site that doesn't exist");
+            debug!("Client requested a site that doesn't exist (host: {host})");
             let status_line = "HTTP/1.1 500 Internal Server Error";
-            let content = "Hibernator doesn't know about the site you're trying to access";
+            let content = format!("Hibernator doesn't know about the site you're trying to access (host: {host})");
             let length = content.len();
             let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
             let _ = stream.write_all(response.as_bytes()).await;
@@ -115,7 +115,7 @@ async fn handle_connection(mut stream: TcpStream, config: &'static Config) {
         .iter()
         .find(|line| line.to_lowercase().starts_with("x-real-ip: "))
         .map(|line| &line[11..]);
-    if !should_be_processed(site_config, path, real_ip) {
+    if !should_be_processed(controller.config, path, real_ip) {
         debug!("Client shall not be served");
         let status_line = "HTTP/1.1 503 Service Unavailable";
         let content = "Server is unavailable";
@@ -128,12 +128,12 @@ async fn handle_connection(mut stream: TcpStream, config: &'static Config) {
     // Determine if we should attempt to proxy the request
     let is_browser = http_request.iter().any(|line| line.to_lowercase() == "sec-fetch-mode: navigate");
     let proxy_mode = match is_browser {
-        true => &site_config.browser_proxy_mode,
-        false => &site_config.proxy_mode,
+        true => &controller.config.browser_proxy_mode,
+        false => &controller.config.proxy_mode,
     };
     let should_proxy = match proxy_mode {
         ProxyMode::Always => true,
-        ProxyMode::WhenReady => is_healthy(site_config.port).await,
+        ProxyMode::WhenReady => is_healthy(controller.config.port).await,
         ProxyMode::Never => false,
     };
     debug!("Is browser: {is_browser}, Proxy mode: {proxy_mode:?}, Should proxy: {should_proxy}");
@@ -141,18 +141,14 @@ async fn handle_connection(mut stream: TcpStream, config: &'static Config) {
     if !should_proxy {
         debug!("Returning 503 right away");
         let status_line = "HTTP/1.1 503 Service Unavailable";
-        let content = include_str!("../static/index.html").replace("KEEP_ALIVE", &site_config.keep_alive.to_string());
+        let content = include_str!("../static/index.html").replace("KEEP_ALIVE", &controller.config.keep_alive.to_string());
         let length = content.len();
         let response = format!(
             "{status_line}\r\nContent-Length: {length}\r\n\r\n{content}"
         );
         let _ = stream.write_all(response.as_bytes()).await;
 
-        let r = start_server(site_config).await;
-        if let Err(e) = &r {
-            eprintln!("Error while starting site {}: {e}", site_config.name);
-        }
-
+        controller.start().await;
         return;
     }
 
@@ -164,20 +160,16 @@ async fn handle_connection(mut stream: TcpStream, config: &'static Config) {
     let mut body = vec![0; content_lenght];
     stream.read_exact(&mut body).await.expect("Could not read request body");
 
-    let timeout_duration = Duration::from_millis(site_config.proxy_timeout_ms.0);
+    let timeout_duration = Duration::from_millis(controller.config.proxy_timeout_ms.0);
     let r = timeout(timeout_duration, async move {
-        let r = start_server(site_config).await;
-        if let Err(e) = r {
-            eprintln!("Error while starting site {}: {e}", site_config.name);
-            return Err(e);
-        }
+        controller.wait_start().await;
         debug!("Site started, waiting for upstream");
         loop {
-            if let Ok(response) = try_proxy(site_config.port, http_request.clone(), body.clone()).await {
-                debug!("Site {} is ready, got response", site_config.name);
-                return Ok(response);
+            if let Ok(response) = try_proxy(controller.config.port, http_request.clone(), body.clone()).await {
+                debug!("Site {} is ready, got response", controller.config.name);
+                return Ok::<Vec<u8>, anyhow::Error>(response);
             }
-            sleep(Duration::from_millis(site_config.proxy_check_interval_ms.0)).await;
+            sleep(Duration::from_millis(controller.config.proxy_check_interval_ms.0)).await;
         }
     }).await;
 
@@ -194,7 +186,7 @@ async fn handle_connection(mut stream: TcpStream, config: &'static Config) {
             let _ = stream.write_all(response.as_bytes()).await;
         },
         Err(_) => {
-            debug!("Site {} took too long to start", site_config.name);
+            debug!("Site {} took too long to start", controller.config.name);
 
             let status_line = "HTTP/1.1 504 Gateway Timeout";
             let content = "Site is booting up. Try again.";
