@@ -89,6 +89,37 @@ proxy_check_interval_ms = 500
 keep_alive = "10m"  # Can be specified with units: s (seconds), m (minutes), h (hours), d (days)
 ```
 
+## Development
+
+### Dependencies
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh      # Rust
+sudo apt update && sudo apt install build-essential                 # GCC
+```
+
+### Building
+
+```bash
+cargo build
+```
+
+### Running
+
+Setup a dev environment (one-time only):
+
+```bash
+sh dev/setup.sh
+```
+
+Run the hibernator (it will also build it):
+
+```bash
+sh dev/run.sh
+```
+
+Check its behavior on `http://localhost:80`.
+
 ## Security considerations
 
 <details>
