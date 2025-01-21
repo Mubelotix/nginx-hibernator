@@ -3,6 +3,10 @@
 # Exit immediately if a command exits with a non-zero status
 set -e
 
+# Step 0: Install systemctl
+echo "Installing systemctl..."
+sudo apt install -y systemctl
+
 # Step 1: Create a Python HTTP server systemd service
 echo "Creating Python HTTP server systemd service..."
 
@@ -92,7 +96,7 @@ sudo rm /etc/nginx/sites-enabled/default || true
 sudo nginx -t
 
 # Restart NGINX to apply the new configuration
-sudo nginx -s reload
+sudo nginx -s reload || sudo systemctl restart nginx
 
 echo "NGINX is configured to proxy traffic to the Python HTTP server."
 
