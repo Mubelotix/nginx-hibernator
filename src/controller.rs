@@ -1,4 +1,4 @@
-use std::{cmp::max, path::Path, sync::{atomic::{AtomicUsize, Ordering}, Arc, RwLock}, time::Duration};
+use std::{cmp::max, path::Path, sync::{atomic::{AtomicU64, AtomicUsize, Ordering}, Arc, RwLock}, time::Duration};
 use chrono::{DateTime, Utc};
 use anyhow::anyhow;
 use log::*;
@@ -8,7 +8,7 @@ use crate::{checking_symlink, get_last_started, get_last_stopped, is_healthy, ma
 pub struct SiteController {
     pub config: &'static SiteConfig,
     state: &'static AtomicUsize,
-    state_last_changed: &'static AtomicUsize,
+    state_last_changed: &'static AtomicU64,
     start_sender: Sender<()>,
     started_receiver: BroadReceiver<()>
 }
@@ -18,7 +18,7 @@ impl SiteController {
         let (start_sender, start_receiver) = tokio::sync::mpsc::channel(1);
         let (started_sender, started_receiver) = tokio::sync::broadcast::channel(1);
         let state = Box::leak(Box::new(AtomicUsize::new(0)));
-        let state_last_changed = Box::leak(Box::new(AtomicUsize::new(0)));
+        let state_last_changed = Box::leak(Box::new(AtomicU64::new(0)));
 
         (Self {
             config,
@@ -45,7 +45,7 @@ impl SiteController {
             return;
         }
         self.state.store(state as usize, Ordering::Relaxed);
-        self.state_last_changed.store(Utc::now().timestamp() as usize, Ordering::Relaxed);
+        self.state_last_changed.store(Utc::now().timestamp() as u64, Ordering::Relaxed);
     }
 
     pub fn get_state(&self) -> SiteState {
@@ -58,11 +58,123 @@ impl SiteController {
         }
     }
 
-    pub fn get_state_with_last_changed(&self) -> (SiteState, usize) {
+    pub fn get_state_with_last_changed(&self) -> (SiteState, u64) {
         let state = self.get_state();
         let last_changed = self.state_last_changed.load(Ordering::Relaxed);
         (state, last_changed)
     }
+
+    async fn should_shutdown(&self) -> anyhow::Result<ShouldShutdown> {
+        debug!("Checking if site {} should be shut down", self.config.name);
+        let now = Utc::now().timestamp() as u64;
+
+        // Read the file and get the last line
+        let content = read_to_string(&self.config.access_log).await.map_err(|e| anyhow!("could not read access log: {e}"))?;
+        let lines = content.lines();
+        let mut rev_lines = lines.rev(); // FIXME: It would be more efficient to use rev_lines but it's not async-compatible
+        let mut last_line = 'line: loop {
+            let potential_last_line = match rev_lines.next() {
+                Some(potential_last_line) => potential_last_line,
+                None => {
+                    // No more lines in access log.
+                    // That means no-one has been accessing the site since it's up.
+                    let (state, last_changed) = self.get_state_with_last_changed();
+    
+                    // That shouldn't happen often given this method only gets called when the site is up
+                    if !state.is_up() {
+                        return Ok(ShouldShutdown::NotUntil(now + self.config.keep_alive)); // Not sure keep_alive is the right value to use
+                    }
+                    
+                    if now - last_changed >= self.config.keep_alive {
+                        return Ok(ShouldShutdown::Now);
+                    } else {
+                        return Ok(ShouldShutdown::NotUntil(last_changed + self.config.keep_alive));
+                    }
+                }
+            };
+
+            if let Some(filter) = &self.config.access_log_filter {
+                if !potential_last_line.contains(filter) {
+                    continue 'line;
+                }
+            }
+    
+            if let Some(ip_blacklist) = &self.config.ip_blacklist {
+                for ip_blacklist in ip_blacklist {
+                    if potential_last_line.starts_with(ip_blacklist) {
+                        continue 'line;
+                    }
+                }
+            }
+    
+            if let Some(ip_whitelist) = &self.config.ip_whitelist {
+                let mut found = false;
+                for ip_whitelist in ip_whitelist {
+                    if potential_last_line.starts_with(ip_whitelist) {
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    continue 'line;
+                }
+            }
+    
+            if let Some(path_blacklist) = &self.config.path_blacklist {
+                let path = potential_last_line.find('"').ok_or(anyhow!("no path container opening quote in last line"))?;
+                let mut potential_path_container = &potential_last_line[path + 1..];
+                let end_path = potential_path_container.find('"').ok_or(anyhow!("no path container closing quote in last line"))?;
+                potential_path_container = &potential_path_container[..end_path];
+                
+                let potential_path = potential_path_container.split(' ').nth(1).ok_or(anyhow!("no path in last line"))?;
+    
+                for path_blacklist in path_blacklist {
+                    if path_blacklist.is_match(potential_path) {
+                        continue 'line;
+                    }
+                }
+            }
+    
+            break potential_last_line;
+        };
+        
+        // Parse the date of the last request
+        let last_request = loop {
+            let start_position = last_line.find('[').ok_or(anyhow!("no date in last line"))?;
+            last_line = &last_line[start_position + 1..];
+    
+            let end_position = last_line.find(']').ok_or(anyhow!("no date in last line"))?;
+            let date_str = &last_line[..end_position];
+            last_line = &last_line[end_position + 1..];
+    
+            let Ok(date) = DateTime::parse_from_str(date_str, "%d/%b/%Y:%H:%M:%S %z") else {continue}; // TODO: the format should be configurable
+    
+            break date;
+        };
+    
+        // Calculate the last action timestamp
+        let mut last_action = last_request.timestamp() as u64;
+        trace!("Last request was at {}", last_action);
+        if let Some(last_started) = get_last_started(&self.config.name).await {
+            trace!("Last started was at {}", last_started);
+            last_action = max(last_action, last_started);
+        }
+        if let Some(last_stopped) = get_last_stopped(&self.config.name).await {
+            trace!("Last stopped was at {}", last_stopped);
+            last_action = max(last_action, last_stopped);
+        }
+        
+        // Check if the site should be shut down
+        let time_since = now.saturating_sub(last_action);
+        if time_since > self.config.keep_alive {
+            debug!("Site {} should be shut down now", self.config.name);
+            Ok(ShouldShutdown::Now)
+        } else {
+            let next_check = last_action + self.config.keep_alive + 1;
+            debug!("Site {} should not be shut down until {next_check}", self.config.name);
+            Ok(ShouldShutdown::NotUntil(next_check))
+        }
+    }    
 
     async fn check(&self) -> u64 {
         let now = Utc::now().timestamp() as u64;
@@ -70,7 +182,7 @@ impl SiteController {
         let up = is_healthy(self.config.port).await;
         match up {
             true => {
-                let should_shutdown = match should_shutdown(self.config).await {
+                let should_shutdown = match self.should_shutdown().await {
                     Ok(should_shutdown) => should_shutdown,
                     Err(err) => {
                         error!("Error while checking site {}: {err}", self.config.name);
@@ -202,100 +314,15 @@ pub enum SiteState {
     Starting
 }
 
+impl SiteState {
+    pub fn is_up(&self) -> bool {
+        matches!(self, SiteState::Up)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum ShouldShutdown {
     Now,
     NotUntil(u64),
 }
 
-async fn should_shutdown(config: &'static SiteConfig) -> anyhow::Result<ShouldShutdown> {
-    debug!("Checking if site {} should be shut down", config.name);
-
-    // Find the last line of the file
-    let content = read_to_string(&config.access_log).await.map_err(|e| anyhow!("could not read access log: {e}"))?;
-    let lines = content.lines();
-    let mut rev_lines = lines.rev(); // FIXME: It would be more efficient to use rev_lines but it's not async-compatible
-    let mut last_line = 'line: loop {
-        let potential_last_line = rev_lines.next().ok_or(anyhow!("no more lines in access log"))?;
-        if let Some(filter) = &config.access_log_filter {
-            if !potential_last_line.contains(filter) {
-                continue 'line;
-            }
-        }
-
-        if let Some(ip_blacklist) = &config.ip_blacklist {
-            for ip_blacklist in ip_blacklist {
-                if potential_last_line.starts_with(ip_blacklist) {
-                    continue 'line;
-                }
-            }
-        }
-
-        if let Some(ip_whitelist) = &config.ip_whitelist {
-            let mut found = false;
-            for ip_whitelist in ip_whitelist {
-                if potential_last_line.starts_with(ip_whitelist) {
-                    found = true;
-                    break;
-                }
-            }
-            if !found {
-                continue 'line;
-            }
-        }
-
-        if let Some(path_blacklist) = &config.path_blacklist {
-            let path = potential_last_line.find('"').ok_or(anyhow!("no path container opening quote in last line"))?;
-            let mut potential_path_container = &potential_last_line[path + 1..];
-            let end_path = potential_path_container.find('"').ok_or(anyhow!("no path container closing quote in last line"))?;
-            potential_path_container = &potential_path_container[..end_path];
-            
-            let potential_path = potential_path_container.split(' ').nth(1).ok_or(anyhow!("no path in last line"))?;
-
-            for path_blacklist in path_blacklist {
-                if path_blacklist.is_match(potential_path) {
-                    continue 'line;
-                }
-            }
-        }
-
-        break potential_last_line;
-    };
-    
-    // Parse the date of the last request
-    let last_request = loop {
-        let start_position = last_line.find('[').ok_or(anyhow!("no date in last line"))?;
-        last_line = &last_line[start_position + 1..];
-
-        let end_position = last_line.find(']').ok_or(anyhow!("no date in last line"))?;
-        let date_str = &last_line[..end_position];
-        last_line = &last_line[end_position + 1..];
-
-        let Ok(date) = DateTime::parse_from_str(date_str, "%d/%b/%Y:%H:%M:%S %z") else {continue}; // TODO: the format should be configurable
-
-        break date;
-    };
-
-    // Calculate the last action timestamp
-    let mut last_action = last_request.timestamp() as u64;
-    trace!("Last request was at {}", last_action);
-    if let Some(last_started) = get_last_started(&config.name).await {
-        trace!("Last started was at {}", last_started);
-        last_action = max(last_action, last_started);
-    }
-    if let Some(last_stopped) = get_last_stopped(&config.name).await {
-        trace!("Last stopped was at {}", last_stopped);
-        last_action = max(last_action, last_stopped);
-    }
-    
-    // Check if the site should be shut down
-    let time_since = (Utc::now().timestamp() as u64).saturating_sub(last_action);
-    if time_since > config.keep_alive {
-        debug!("Site {} should be shut down now", config.name);
-        Ok(ShouldShutdown::Now)
-    } else {
-        let next_check = last_action + config.keep_alive + 1;
-        debug!("Site {} should not be shut down until {next_check}", config.name);
-        Ok(ShouldShutdown::NotUntil(next_check))
-    }
-}
