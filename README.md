@@ -95,7 +95,7 @@ keep_alive = "10m"  # Can be specified with units: s (seconds), m (minutes), h (
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh      # Rust
-sudo apt update && sudo apt install build-essential                 # GCC
+sudo apt update && sudo apt install build-essential -y              # GCC
 ```
 
 ### Building

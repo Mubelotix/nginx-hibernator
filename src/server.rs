@@ -11,7 +11,7 @@ pub async fn setup_server(config: &'static Config) {
     spawn(async move {
         loop {
             if let Ok((stream, _addr)) = listener.accept().await {
-                spawn(handle_connection(stream, config));
+                spawn(handle_connection(stream));
             }
         }
     });
@@ -66,7 +66,7 @@ async fn try_proxy(port: u16, head: Vec<String>, body: Vec<u8>) -> anyhow::Resul
 }
 
 // It's ok to panic in this function, as it's only called in its own thread
-async fn handle_connection(mut stream: TcpStream, config: &'static Config) {
+async fn handle_connection(mut stream: TcpStream) {
     let buf_reader = BufReader::new(&mut stream);
     let http_request: Vec<_> = LinesStream::new(buf_reader.lines())
         .map(|result| result.expect("Could not read request lines"))
@@ -148,7 +148,7 @@ async fn handle_connection(mut stream: TcpStream, config: &'static Config) {
         );
         let _ = stream.write_all(response.as_bytes()).await;
 
-        controller.start().await;
+        controller.trigger_start().await;
         return;
     }
 
@@ -162,7 +162,7 @@ async fn handle_connection(mut stream: TcpStream, config: &'static Config) {
 
     let timeout_duration = Duration::from_millis(controller.config.proxy_timeout_ms.0);
     let r = timeout(timeout_duration, async move {
-        controller.wait_start().await;
+        controller.waiting_trigger_start().await;
         debug!("Site started, waiting for upstream");
         loop {
             if let Ok(response) = try_proxy(controller.config.port, http_request.clone(), body.clone()).await {

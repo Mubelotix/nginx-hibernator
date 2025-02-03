@@ -8,7 +8,7 @@ use crate::{checking_symlink, get_last_started, get_last_stopped, is_healthy, ma
 pub struct SiteController {
     pub config: &'static SiteConfig,
     state: &'static AtomicUsize,
-    starting_since: &'static AtomicUsize,
+    state_last_changed: &'static AtomicUsize,
     start_sender: Sender<()>,
     started_receiver: BroadReceiver<()>
 }
@@ -18,25 +18,150 @@ impl SiteController {
         let (start_sender, start_receiver) = tokio::sync::mpsc::channel(1);
         let (started_sender, started_receiver) = tokio::sync::broadcast::channel(1);
         let state = Box::leak(Box::new(AtomicUsize::new(0)));
-        let starting_since = Box::leak(Box::new(AtomicUsize::new(0)));
+        let state_last_changed = Box::leak(Box::new(AtomicUsize::new(0)));
 
         (Self {
             config,
             state,
-            starting_since,
+            state_last_changed,
             start_sender,
             started_receiver
         }, start_receiver, started_sender)
     }
 
-    pub async fn start(&self) {
+    pub async fn trigger_start(&self) {
         let _ = self.start_sender.try_send(()); // We don't care about the error because if this fails, that means the site was already requested to be started
     }
 
-    pub async fn wait_start(&self) {
-        self.start().await;
+    pub async fn waiting_trigger_start(&self) {
+        self.trigger_start().await;
         let mut started_receiver = self.started_receiver.resubscribe();
         let _ = started_receiver.recv().await;
+    }
+
+    fn set_state(&self, state: SiteState) {
+        let old_state = self.get_state();
+        if old_state == state {
+            return;
+        }
+        self.state.store(state as usize, Ordering::Relaxed);
+        self.state_last_changed.store(Utc::now().timestamp() as usize, Ordering::Relaxed);
+    }
+
+    pub fn get_state(&self) -> SiteState {
+        let state = self.state.load(Ordering::Relaxed);
+        match state {
+            0 => SiteState::Down,
+            1 => SiteState::Up,
+            2 => SiteState::Starting,
+            _ => unreachable!()
+        }
+    }
+
+    pub fn get_state_with_last_changed(&self) -> (SiteState, usize) {
+        let state = self.get_state();
+        let last_changed = self.state_last_changed.load(Ordering::Relaxed);
+        (state, last_changed)
+    }
+
+    async fn check(&self) -> u64 {
+        let now = Utc::now().timestamp() as u64;
+
+        let up = is_healthy(self.config.port).await;
+        match up {
+            true => {
+                let should_shutdown = match should_shutdown(self.config).await {
+                    Ok(should_shutdown) => should_shutdown,
+                    Err(err) => {
+                        error!("Error while checking site {}: {err}", self.config.name);
+                        self.set_state(SiteState::Up);
+                        return now + self.config.keep_alive;
+                    },
+                };
+                match should_shutdown {
+                    ShouldShutdown::Now => {
+                        mark_stopped(&self.config.name).await;
+
+                        info!("Shutting down site {}", self.config.name);
+                        
+                        let r = checking_symlink(&self.config.nginx_hibernator_config(), &self.config.nginx_enabled_config()).await;
+                        let r = match r {
+                            Ok(true) => run_command("nginx -s reload").await,
+                            Ok(false) => Ok(()),
+                            Err(e) => {
+                                error!("Error while checking nginx symlink for {}: {e}", self.config.name);
+                                return now + self.config.keep_alive;
+                            }
+                        };
+
+                        if let Err(e) = r {
+                            error!("Error while reloading nginx for {}: {e}", self.config.name);
+                            return now + self.config.keep_alive;
+                        }
+                    
+                        let r = run_command(&format!("systemctl stop {}", self.config.service_name)).await;
+                        if let Err(e) = r {
+                            error!("Error while shutting down site {}: {e}", self.config.name);
+                            // TODO: What should be the state there?
+                        }
+                        
+                        self.set_state(SiteState::Down);
+                        now + self.config.keep_alive
+                    },
+                    ShouldShutdown::NotUntil(next_check) => {
+                        self.set_state(SiteState::Up);
+                        next_check
+                    }
+                }
+            },
+            false => {
+                self.set_state(SiteState::Down);
+                now + self.config.keep_alive
+            }
+        }
+    }
+
+    async fn start(&self, started_sender: &BroadSender<()>) {    
+        // Start the server
+        if !try_mark_started(self.config).await {
+            trace!("Site {} cannot be started yet (under cooldown)", self.config.name);
+            return;
+        }
+        info!("Starting service {}", self.config.name);
+        let r = run_command(&format!("systemctl start {}", self.config.service_name)).await;
+        if let Err(e) = r {
+            error!("Error while starting site {}: {e}", self.config.name);
+            return;
+        }
+        self.set_state(SiteState::Starting);
+
+        // Wait until the site is healthy
+        loop { // TODO: timeout
+            let is_up = is_healthy(self.config.port).await;
+            if is_up {
+                break;
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+        self.set_state(SiteState::Up);
+        let _ = started_sender.send(());
+
+        // Reload nginx
+        info!("Reloading nginx for {}", self.config.name);
+        let should_reload = checking_symlink(&self.config.nginx_available_config(), &self.config.nginx_enabled_config()).await;
+        let should_reload = match should_reload {
+            Ok(should_reload) => should_reload,
+            Err(e) => {
+                error!("Error while checking nginx symlink for {}: {e}", self.config.name);
+                return;
+            }
+        };
+        if should_reload {
+            let r = run_command("nginx -s reload").await;
+            if let Err(e) = r {
+                error!("Error while reloading nginx for {}: {e}", self.config.name);
+            }
+        }
     }
 
     pub async fn handle(&self, mut start_receiver: Receiver<()>, started_sender: BroadSender<()>) {
@@ -51,55 +176,8 @@ impl SiteController {
             let recv_task = start_receiver.recv();
     
             tokio::select! {
-                _ = sleep_task => {
-                    let (next_check2, new_state) = check(self.config).await;
-                    next_check = next_check2;
-                    match new_state {
-                        SiteState::Down => self.state.store(0, Ordering::Relaxed),
-                        SiteState::Up => self.state.store(1, Ordering::Relaxed),
-                        SiteState::Starting { .. } => unreachable!() 
-                    };
-                },
-                _ = recv_task => {
-                    // TODO: cooldowns
-    
-                    // Start the server
-                    let r = start_server(self.config).await;
-                    if let Err(e) = r {
-                        error!("Error while starting site {}: {e}", self.config.name);
-                        continue;
-                    }
-                    self.state.store(1, Ordering::Relaxed);
-                    self.starting_since.store(Utc::now().timestamp() as usize, Ordering::Relaxed);
-    
-                    // Wait until the site is healthy
-                    loop {
-                        let is_up = is_healthy(self.config.port).await;
-                        if is_up {
-                            break;
-                        }
-                        sleep(Duration::from_millis(100)).await;
-                    }
-                    self.state.store(1, Ordering::Relaxed);
-                    let _ = started_sender.send(());
-    
-                    // Reload nginx
-                    info!("Reloading nginx for {}", self.config.name);
-                    let should_reload = checking_symlink(&self.config.nginx_available_config(), &self.config.nginx_enabled_config()).await;
-                    let should_reload = match should_reload {
-                        Ok(should_reload) => should_reload,
-                        Err(e) => {
-                            error!("Error while checking nginx symlink for {}: {e}", self.config.name);
-                            continue;
-                        }
-                    };
-                    if should_reload {
-                        let r = run_command("nginx -s reload").await;
-                        if let Err(e) = r {
-                            error!("Error while reloading nginx for {}: {e}", self.config.name);
-                        }
-                    }
-                }
+                _ = sleep_task => next_check = self.check().await,
+                _ = recv_task => self.start(&started_sender).await,
             }
         }        
     }
@@ -111,15 +189,17 @@ pub fn get_controller(host: &String) -> Option<&'static SiteController> {
     // SAFETY:
     // Accessing the static mutable is safe because it's only accessed in a read-only way during
     // the server execution. The value is only mutated once, before the server starts.
+    #[allow(static_mut_refs)]
     unsafe {
         SITE_CONTROLLERS.iter().find(|controller| controller.config.hosts.contains(host))
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SiteState {
     Down,
     Up,
-    Starting { since: usize }
+    Starting
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -219,58 +299,3 @@ async fn should_shutdown(config: &'static SiteConfig) -> anyhow::Result<ShouldSh
         Ok(ShouldShutdown::NotUntil(next_check))
     }
 }
-
-async fn shutdown_server(site_config: &'static SiteConfig) -> anyhow::Result<()> {
-    mark_stopped(&site_config.name).await;
-
-    info!("Shutting down site {}", site_config.name);
-
-    if checking_symlink(&site_config.nginx_hibernator_config(), &site_config.nginx_enabled_config()).await? {
-        run_command("nginx -s reload").await?;
-    }
-
-    run_command(&format!("systemctl stop {}", site_config.service_name)).await?;
-
-    Ok(())
-}
-
-async fn start_server(site_config: &'static SiteConfig) -> anyhow::Result<()> {
-    if !try_mark_started(site_config).await {
-        trace!("Site {} cannot be started yet (under cooldown)", site_config.name);
-        return Ok(());
-    }
-
-    info!("Starting service {}", site_config.name);
-    run_command(&format!("systemctl start {}", site_config.service_name)).await?;
-
-    Ok(())
-}
-
-async fn check(site_config: &'static SiteConfig) -> (u64, SiteState) {
-    let now = Utc::now().timestamp() as u64;
-
-    let up = is_healthy(site_config.port).await;
-    match up {
-        true => {
-            let should_shutdown = match should_shutdown(site_config).await {
-                Ok(should_shutdown) => should_shutdown,
-                Err(err) => {
-                    error!("Error while checking site {}: {err}", site_config.name);
-                    return (now + site_config.keep_alive, SiteState::Up);
-                },
-            };
-            match should_shutdown {
-                ShouldShutdown::Now => {
-                    let r = shutdown_server(site_config).await;
-                    if let Err(e) = r {
-                        error!("Error while shutting down site {}: {e}", site_config.name);
-                    }
-                    (now + site_config.keep_alive, SiteState::Down)
-                },
-                ShouldShutdown::NotUntil(next_check) => (next_check, SiteState::Up)
-            }
-        },
-        false => (now + site_config.keep_alive, SiteState::Down)
-    }
-}
-

@@ -5,7 +5,7 @@ use serde::{de::{self, Visitor}, Deserialize, Deserializer};
 fn deserialize_duration<'de, D>(deserializer: D) -> Result<u64, D::Error> where D: Deserializer<'de> {
     struct DurationString;
 
-    impl<'de> Visitor<'de> for DurationString {
+    impl Visitor<'_> for DurationString {
         type Value = u64;
 
         fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
