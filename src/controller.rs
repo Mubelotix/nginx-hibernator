@@ -2,7 +2,7 @@ use std::{cmp::max, sync::atomic::{AtomicU64, AtomicUsize, Ordering}, time::Dura
 use chrono::{DateTime, Utc};
 use anyhow::anyhow;
 use log::*;
-use tokio::{fs::read_to_string, sync::{mpsc::{Receiver, Sender}, broadcast::{Receiver as BroadReceiver, Sender as BroadSender}}, time::sleep};
+use tokio::{fs::read_to_string, sync::{broadcast::{Receiver as BroadReceiver, Sender as BroadSender}, mpsc::{Receiver, Sender}}, time::{sleep, Instant}};
 use crate::{checking_symlink, get_last_started, get_last_stopped, is_healthy, mark_stopped, run_command, try_mark_started, SiteConfig};
 
 pub struct SiteController {
@@ -274,17 +274,21 @@ impl SiteController {
         self.set_state(SiteState::Starting).await;
 
         // Wait until the site is healthy
-        loop { // TODO: timeout
+        let start = Instant::now();
+        let state = loop {
+            if start.elapsed() > Duration::from_secs(self.config.start_timeout) {
+                error!("Site {} did not start in time", self.config.name);
+                break SiteState::Unknown;
+            }
+
             let is_up = is_healthy(self.config.port).await;
             if is_up {
-                break;
+                break SiteState::Up;
             }
-            sleep(Duration::from_millis(100)).await;
-        }
-        self.set_state(SiteState::Up).await;
+            sleep(Duration::from_millis(self.config.start_check_interval_ms)).await;
+        };
+        self.set_state(state).await;
         let _ = started_sender.send(());
-
-        
     }
 
     pub async fn handle(&self, mut start_receiver: Receiver<()>, started_sender: BroadSender<()>) {

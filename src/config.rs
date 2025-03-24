@@ -253,6 +253,13 @@ pub struct SiteConfig {
     /// The service will be stopped after this time.
     #[serde(deserialize_with = "deserialize_duration")]
     pub keep_alive: u64,
+
+    /// The time to wait before giving up on waiting for the service to start.
+    #[serde(deserialize_with = "deserialize_duration")]
+    pub start_timeout: u64,
+
+    /// The interval to check if the service started already.
+    pub start_check_interval_ms: u64,
 }
 
 impl SiteConfig {
