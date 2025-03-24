@@ -13,15 +13,13 @@ source_rustup_functions() {
         return 1
     fi
 
-    last_line=$(echo "$rust_script" | tail -n 1)
-    if [ "$last_line" != 'main "$@" || exit 1' ]; then
+    line_number=$(echo "$rust_script" | grep -n "set +u" | cut -d: -f1)
+    if [ -z "$line_number" ]; then
         echo "${red}Error: An update to the Rustup script has broken this script.${normal} Please open an issue at https://github.com/Mubelotix/nginx-hibernator/issues"
         return 1
     fi
 
-    total_lines=$(echo "$rust_script" | wc -l)
-    total_lines=$((total_lines - 1))
-    rust_script=$(echo "$rust_script" | head -n $total_lines)
+    rust_script=$(echo "$rust_script" | head -n $line_number)
     eval "$rust_script"
 }
 
