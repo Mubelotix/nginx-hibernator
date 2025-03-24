@@ -91,9 +91,10 @@ impl SiteController {
     pub fn get_state(&self) -> SiteState {
         let state = self.state.load(Ordering::Relaxed);
         match state {
-            0 => SiteState::Down,
-            1 => SiteState::Up,
-            2 => SiteState::Starting,
+            0 => SiteState::Unknown,
+            1 => SiteState::Down,
+            2 => SiteState::Up,
+            3 => SiteState::Starting,
             _ => unreachable!()
         }
     }
