@@ -180,7 +180,7 @@ async fn handle_connection(mut stream: TcpStream) {
         },
         Ok(Err(e)) => {
             let status_line = "HTTP/1.1 500 Internal Server Error";
-            let content = "Error while starting site";
+            let content = format!("Error while starting site: {e}");
             let length = content.len();
             let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
             let _ = stream.write_all(response.as_bytes()).await;

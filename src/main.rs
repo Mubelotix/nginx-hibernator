@@ -5,11 +5,9 @@
 // service_name = "webserver" # The name of the service that runs the site
 // keep_alive = "5m" # Time to keep the site running after the last access
 
-use std::{cmp::max, path::Path, sync::{atomic::{AtomicUsize, Ordering}, Arc, RwLock}, time::Duration};
-use chrono::{DateTime, Utc};
-use anyhow::anyhow;
+use std::path::Path;
 use log::*;
-use tokio::{fs::read_to_string, spawn, sync::mpsc::{Receiver, Sender}, time::sleep};
+use tokio::spawn;
 
 mod config;
 use config::*;
