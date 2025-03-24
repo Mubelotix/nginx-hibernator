@@ -1,5 +1,5 @@
 use std::time::Duration;
-use crate::{get_controller, is_healthy, Config, ProxyMode, SiteConfig};
+use crate::{get_controller, Config, ProxyMode, SiteConfig};
 use log::*;
 use anyhow::anyhow;
 use tokio::{io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader}, net::{TcpListener, TcpStream}, spawn, time::{sleep, timeout}};
@@ -133,7 +133,7 @@ async fn handle_connection(mut stream: TcpStream) {
     };
     let should_proxy = match proxy_mode {
         ProxyMode::Always => true,
-        ProxyMode::WhenReady => is_healthy(controller.config.port).await,
+        ProxyMode::WhenReady => controller.get_state().is_up(),
         ProxyMode::Never => false,
     };
     debug!("Is browser: {is_browser}, Proxy mode: {proxy_mode:?}, Should proxy: {should_proxy}");
