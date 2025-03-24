@@ -118,9 +118,13 @@ async fn handle_connection(mut stream: TcpStream) {
     if !should_be_processed(controller.config, path, real_ip) {
         debug!("Client shall not be served");
         let status_line = "HTTP/1.1 503 Service Unavailable";
+        let retry_after = controller.get_progress().await.and_then(|(done_ms, duration_ms)| {
+            let remaining = duration_ms.checked_sub(done_ms).unwrap_or_default() / 1000;
+            if remaining > 0 { Some(format!("Retry-After: {remaining}\r\n")) } else { None }
+        }).unwrap_or_default();
         let content = "Server is unavailable";
         let length = content.len();
-        let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
+        let response = format!("{status_line}\r\nContent-Length: {length}\r\n{retry_after}\r\n{content}");
         let _ = stream.write_all(response.as_bytes()).await;
         return;
     }
@@ -141,10 +145,17 @@ async fn handle_connection(mut stream: TcpStream) {
     if !should_proxy {
         debug!("Returning 503 right away");
         let status_line = "HTTP/1.1 503 Service Unavailable";
-        let content = include_str!("../static/index.html").replace("KEEP_ALIVE", &controller.config.keep_alive.to_string());
+        let (retry_after, done_ms, duration_ms) = controller.get_progress().await.and_then(|(done_ms, duration_ms)| {
+            let remaining = duration_ms.checked_sub(done_ms).unwrap_or_default() / 1000;
+            if remaining > 0 { Some((format!("Retry-After: {remaining}\r\n"), done_ms, duration_ms)) } else { None }
+        }).unwrap_or_default();
+        let content = include_str!("../static/index.html")
+            .replace("DONE_MS", &done_ms.to_string())
+            .replace("DURATION_MS", &duration_ms.to_string())
+            .replace("KEEP_ALIVE", &controller.config.keep_alive.to_string());
         let length = content.len();
         let response = format!(
-            "{status_line}\r\nContent-Length: {length}\r\n\r\n{content}"
+            "{status_line}\r\nContent-Length: {length}\r\n{retry_after}\r\n{content}"
         );
         let _ = stream.write_all(response.as_bytes()).await;
 

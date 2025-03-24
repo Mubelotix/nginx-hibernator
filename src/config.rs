@@ -147,6 +147,14 @@ impl Default for StartCheckInterval {
     }
 }
 
+#[derive(Deserialize, Debug)]
+pub struct EtaPercentile(pub usize);
+impl Default for EtaPercentile {
+    fn default() -> Self {
+        EtaPercentile(95)
+    }
+}
+
 pub struct GlobWrapper(pub GlobMatcher);
 impl<'de> Deserialize<'de> for GlobWrapper {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
@@ -201,6 +209,18 @@ pub struct SiteConfig {
     /// Defaults to `/etc/nginx/sites-available/nginx-hibernator`.
     #[serde(default)]
     pub nginx_hibernator_config: Option<String>,
+
+    /// Where the the start durations should be stored.
+    /// 
+    /// Disabled by default.
+    #[serde(default)]
+    pub start_durations: Option<String>,
+
+    /// The percentile to use for ETA computation. Should be between 0 and 100.
+    /// 
+    /// 95 by default.
+    #[serde(default)]
+    pub eta_percentile: EtaPercentile,
     
     /// The port the service listens to.
     /// Used to determine if the service is up.

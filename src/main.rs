@@ -93,7 +93,7 @@ async fn main() {
     let mut controllers = Vec::new();
     let mut channels = Vec::new();
     for site_config in &config.sites {
-        let (controller, start_receiver, started_sender) = SiteController::new(site_config);
+        let (controller, start_receiver, started_sender) = SiteController::new(site_config).await;
 
         controllers.push(controller);
         channels.push((start_receiver, started_sender));

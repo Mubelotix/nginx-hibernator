@@ -7,16 +7,31 @@
 </head>
 <body>
     <h1>Please wait a few seconds</h1>
-    <p>
+    <p id="message">
         The server is currently booting up. The page will show once it's ready.
     </p>
+    
     <p>
         Want to use a lightweight hibernator on your own server? Take a look at <a href="https://github.com/mubelotix/nginx-site-hibernator">our GitHub</a>.
     </p>
     <script>
+        let keep_alive = KEEP_ALIVE;
+        let done_ms = DONE_MS;
+        let duration_ms = DURATION_MS;
+
         setTimeout(() => {
             window.location.reload();
-        }, Math.min(KEEP_ALIVE * 1000, 1000));
+        }, Math.min(keep_alive * 1000, 1000));
+
+        if (done_ms > 0 && duration_ms > 0) {
+            // Add some text to the message
+            let remaining_ms = duration_ms - done_ms;
+            let remaining = Math.ceil(remaining_ms / 1000);
+            if (remaining > 0) {
+                let message = document.getElementById('message');
+                message.innerHTML += ` It should be done by ${remaining} seconds.`;
+            }
+        }
     </script>
 </body>
 </html>
