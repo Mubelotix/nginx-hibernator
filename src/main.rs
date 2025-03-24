@@ -5,7 +5,7 @@
 // service_name = "webserver" # The name of the service that runs the site
 // keep_alive = "5m" # Time to keep the site running after the last access
 
-use std::path::Path;
+use std::{fs::metadata, os::unix::fs::MetadataExt, path::Path};
 use log::*;
 use tokio::spawn;
 
@@ -20,12 +20,28 @@ use util::*;
 mod controller;
 use controller::*;
 
-
 #[tokio::main(flavor = "current_thread")]
 async fn main() { 
     env_logger::init();
 
     let config_path = std::env::args().nth(1).unwrap_or(String::from("config.toml"));
+
+    #[cfg(target_family = "unix")]
+    {
+        let metadata = metadata(&config_path).expect("could not read config file metadata");
+        let uid = metadata.uid();
+        let mode = metadata.mode();
+        let current_uid = unsafe { libc::getuid() };
+
+        if uid != current_uid {
+            panic!("Config file should be owned by current user");
+        }
+    
+        if mode & 0o002 != 0 {
+            panic!("Config file should not be writable by other users");
+        }
+    }
+
     let config_data = std::fs::read_to_string(config_path).expect("could not read config file");
     let config: Config = toml::from_str(&config_data).expect("could not parse config file");
     let config = Box::leak(Box::new(config));
