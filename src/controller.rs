@@ -276,7 +276,7 @@ impl SiteController {
         // Wait until the site is healthy
         let start = Instant::now();
         let state = loop {
-            if start.elapsed() > Duration::from_secs(self.config.start_timeout) {
+            if start.elapsed() > Duration::from_millis(self.config.start_timeout_ms.0) {
                 error!("Site {} did not start in time", self.config.name);
                 break SiteState::Unknown;
             }
@@ -285,7 +285,7 @@ impl SiteController {
             if is_up {
                 break SiteState::Up;
             }
-            sleep(Duration::from_millis(self.config.start_check_interval_ms)).await;
+            sleep(Duration::from_millis(self.config.start_check_interval_ms.0)).await;
         };
         self.set_state(state).await;
         let _ = started_sender.send(());

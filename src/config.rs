@@ -131,6 +131,22 @@ impl Default for ProxyCheckInterval {
     }
 }
 
+#[derive(Deserialize, Debug)]
+pub struct StartTimeout(pub u64);
+impl Default for StartTimeout {
+    fn default() -> Self {
+        StartTimeout(5*60*1000)
+    }
+}
+
+#[derive(Deserialize, Debug)]
+pub struct StartCheckInterval(pub u64);
+impl Default for StartCheckInterval {
+    fn default() -> Self {
+        StartCheckInterval(100)
+    }
+}
+
 pub struct GlobWrapper(pub GlobMatcher);
 impl<'de> Deserialize<'de> for GlobWrapper {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
@@ -254,12 +270,13 @@ pub struct SiteConfig {
     #[serde(deserialize_with = "deserialize_duration")]
     pub keep_alive: u64,
 
-    /// The time to wait before giving up on waiting for the service to start.
-    #[serde(deserialize_with = "deserialize_duration")]
-    pub start_timeout: u64,
+    /// The time to wait before giving up on waiting for the service to start, in milliseconds.
+    #[serde(default)]
+    pub start_timeout_ms: StartTimeout,
 
-    /// The interval to check if the service started already.
-    pub start_check_interval_ms: u64,
+    /// The interval to check if the service started already, in milliseconds.
+    #[serde(default)]
+    pub start_check_interval_ms: StartCheckInterval,
 }
 
 impl SiteConfig {
