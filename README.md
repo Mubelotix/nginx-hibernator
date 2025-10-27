@@ -24,69 +24,121 @@ Generate the following sample using this chatgpt prompt:
 -->
 
 ```toml
-# Top-level configuration settings for the hibernator service
+##############################################
+# Hibernator Configuration File
+# This file controls the global hibernator behavior and per-site settings.
+# All durations support suffixes: s (seconds), m (minutes), h (hours), d or j (days)
+##############################################
 
-# Where the nginx hibernator config file is located.
-# Defaults to "/etc/nginx/sites-available/hibernator".
-nginx_hibernator_config = "/etc/nginx/sites-available/hibernator"
 
-# The port the hibernator listens to.
-# This port should never be exposed to the internet.
+##############################################
+# Top-level Configuration
+##############################################
+
+# The port that the hibernator listens on.
+# This port should **never** be exposed to the internet.
 # Defaults to 7878.
 hibernator_port = 7878
 
-# List of sites to be managed by the hibernator.
+# Path to the database file where runtime data is stored.
+# Defaults to "./data.mdb".
+database_path = "./data.mdb"
+
+
+
+##############################################
+# Per-site Configuration
+##############################################
+
 [[sites]]
+# The unique name of the site.
+name = "example-site"
 
-# The name of the site. Must be unique.
-name = "example_site"
+# Path to nginx "available" configuration file.
+# Default: /etc/nginx/sites-available/{name}
+# nginx_available_config = "/etc/nginx/sites-available/example-site"
 
-# Path to the nginx available config file.
-# Defaults to "/etc/nginx/sites-available/{name}".
-nginx_available_config = "/etc/nginx/sites-available/example_site"
+# Path to nginx "enabled" configuration file.
+# Default: /etc/nginx/sites-enabled/{name}
+# nginx_enabled_config = "/etc/nginx/sites-enabled/example-site"
 
-# Path to the nginx enabled config file.
-# Defaults to "/etc/nginx/sites-enabled/{name}".
-nginx_enabled_config = "/etc/nginx/sites-enabled/example_site"
+# Path to nginx hibernator configuration.
+# Default: /etc/nginx/sites-available/nginx-hibernator
+# nginx_hibernator_config = "/etc/nginx/sites-available/nginx-hibernator"
 
-# The port the service listens to. Used to determine if the service is up.
+# Number of recent start durations to store for ETA computation.
+# Default: 100
+eta_sample_size = 100
+
+# Percentile used to compute ETA from samples.
+# Should be between 0 and 100. Default: 95
+eta_percentile = 95
+
+# Port that the backend service listens to.
+# Used to determine if the service is up.
 port = 8080
 
-# The path to the access log file.
-# Your nginx configuration must log the requests to this file.
-access_log = "/var/log/nginx/example_site_access.log"
+# Path to the nginx access log file.
+# Must be the same file where nginx logs requests.
+access_log = "/var/log/nginx/example-site.access.log"
 
-# Optional filter to match lines in the access log.
+# Optional substring filter for access log entries.
 # Only lines containing this string will be considered.
-# Example: "GET /api/"
-# access_log_filter = "GET /api/"  # Uncomment to set a filter
+# access_log_filter = "GET /api/"
 
-# The name of the systemctl service that runs the site.
-# Commands like `systemctl start` and `systemctl stop` will be run with this name.
-service_name = "example_site_service"
+# Systemd service name for this site.
+# Commands like `systemctl start <service_name>` will be executed.
+service_name = "example-site.service"
 
-# The hostnames that the service listens to.
-# Used by the hibernator to know which site to start upon receiving a request.
+# Hostnames that this site responds to.
+# Used to decide which service to start when requests come in.
 hosts = ["example.com", "www.example.com"]
 
-# The proxy mode.
-#   - "all": Proxies all requests.
-#   - "nonbrowser": Only waits for API calls and shows a waiting page for browser users.
-#   - "none": Disables the proxy feature.
-# Defaults to "nonbrowser".
-proxy_mode = "nonbrowser"
+# Proxy behavior mode. Options:
+#   - "always"     → always proxy requests
+#   - "when_ready" → proxy only when upstream is ready
+#   - "never"      → disable proxy
+# Default: "always"
+proxy_mode = "always"
 
-# Maximum time to wait before giving up on the proxy, in milliseconds.
-# Defaults to 28000 ms (28 seconds).
+# Proxy mode for browser requests.
+# Default: "when_ready"
+browser_proxy_mode = "when_ready"
+
+# Maximum time to wait for the backend proxy to respond (milliseconds).
+# Default: 28000
 proxy_timeout_ms = 28000
 
-# Interval time to check if the proxy is up, in milliseconds.
-# Defaults to 500 ms (0.5 seconds).
+# Interval to check if proxy is up (milliseconds).
+# Default: 500
 proxy_check_interval_ms = 500
 
-# The time in seconds to keep the service running after the last request.
-# The service will be stopped after this time. Example: "10m" for 10 minutes.
-keep_alive = "10m"  # Can be specified with units: s (seconds), m (minutes), h (hours), d (days)
+# List of glob patterns for paths that should NOT count as activity.
+# Requests to these paths do not reset the keep-alive timer.
+# Example: ["/static/*", "/health", "/favicon.ico"]
+# path_blacklist = ["/static/*", "/health"]
+
+# List of IPs or prefixes that should NOT count as activity.
+# Example: ["127.0.0.1", "192.168.0.0/16"]
+# ip_blacklist = ["127.0.0.1"]
+
+# List of IPs or prefixes allowed to wake up the service.
+# If set, requests from other IPs are ignored.
+# Example: ["203.0.113.0/24"]
+# ip_whitelist = ["203.0.113.0/24"]
+
+# How long to keep the service running after last request.
+# Accepts units: s (seconds), m (minutes), h (hours), d (days)
+# Example: "10m" means 10 minutes.
+keep_alive = "10m"
+
+# Maximum time to wait for service startup (milliseconds).
+# Default: 300000 (5 minutes)
+start_timeout_ms = 300000
+
+# Interval to check if the service has started (milliseconds).
+# Default: 100
+start_check_interval_ms = 100
 ```
 
 ## Development
@@ -137,78 +189,6 @@ The content of the config file is not sanitized.
 **Do not rely on user input to generate the config file.**
 
 Malicious configurations could trigger code execution as root, and XSS injections in waiting pages.
-
-### Malware
-
-This program needs to run as root. Hence, I have kept the dependencies to a minimum. Here is the dependency tree :
-
-
-```
-nginx-hibernator v0.1.0 (/home/mubelotix/projects/nginx-site-hibernator)
-├── anyhow v1.0.93
-├── chrono v0.4.38
-│   ├── iana-time-zone v0.1.61
-│   └── num-traits v0.2.19
-│       [build-dependencies]
-│       └── autocfg v1.4.0
-├── env_logger v0.11.5
-│   ├── anstream v0.6.18
-│   │   ├── anstyle v1.0.10
-│   │   ├── anstyle-parse v0.2.6
-│   │   │   └── utf8parse v0.2.2
-│   │   ├── anstyle-query v1.1.2
-│   │   ├── colorchoice v1.0.3
-│   │   ├── is_terminal_polyfill v1.70.1
-│   │   └── utf8parse v0.2.2
-│   ├── anstyle v1.0.10
-│   ├── env_filter v0.1.2
-│   │   ├── log v0.4.22
-│   │   └── regex v1.11.1
-│   │       ├── aho-corasick v1.1.3
-│   │       │   └── memchr v2.7.4
-│   │       ├── memchr v2.7.4
-│   │       ├── regex-automata v0.4.8
-│   │       │   ├── aho-corasick v1.1.3 (*)
-│   │       │   ├── memchr v2.7.4
-│   │       │   └── regex-syntax v0.8.5
-│   │       └── regex-syntax v0.8.5
-│   ├── humantime v2.1.0
-│   └── log v0.4.22
-├── log v0.4.22
-├── rev_lines v0.3.0
-│   └── thiserror v1.0.68
-│       └── thiserror-impl v1.0.68 (proc-macro)
-│           ├── proc-macro2 v1.0.89
-│           │   └── unicode-ident v1.0.13
-│           ├── quote v1.0.37
-│           │   └── proc-macro2 v1.0.89 (*)
-│           └── syn v2.0.87
-│               ├── proc-macro2 v1.0.89 (*)
-│               ├── quote v1.0.37 (*)
-│               └── unicode-ident v1.0.13
-├── serde v1.0.214
-│   └── serde_derive v1.0.214 (proc-macro)
-│       ├── proc-macro2 v1.0.89 (*)
-│       ├── quote v1.0.37 (*)
-│       └── syn v2.0.87 (*)
-└── toml v0.8.19
-    ├── serde v1.0.214 (*)
-    ├── serde_spanned v0.6.8
-    │   └── serde v1.0.214 (*)
-    ├── toml_datetime v0.6.8
-    │   └── serde v1.0.214 (*)
-    └── toml_edit v0.22.22
-        ├── indexmap v2.6.0
-        │   ├── equivalent v1.0.1
-        │   └── hashbrown v0.15.1
-        ├── serde v1.0.214 (*)
-        ├── serde_spanned v0.6.8 (*)
-        ├── toml_datetime v0.6.8 (*)
-        └── winnow v0.6.20
-```
-
-You might get the hibernator to run as non-root using sudo's command whitelist feature. This might require forking the project to add "sudo" in front of the commands.
-</details>
 
 ## Alternatives
 
