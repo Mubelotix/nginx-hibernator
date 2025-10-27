@@ -148,6 +148,14 @@ impl Default for StartCheckInterval {
 }
 
 #[derive(Deserialize, Debug)]
+pub struct EtaSampleSize(pub usize);
+impl Default for EtaSampleSize {
+    fn default() -> Self {
+        EtaSampleSize(100)
+    }
+}
+
+#[derive(Deserialize, Debug)]
 pub struct EtaPercentile(pub usize);
 impl Default for EtaPercentile {
     fn default() -> Self {
@@ -210,11 +218,10 @@ pub struct SiteConfig {
     #[serde(default)]
     pub nginx_hibernator_config: Option<String>,
 
-    /// Where the the start durations should be stored.
-    /// 
-    /// Disabled by default.
+    /// The number of start durations to store.
+    /// 100 by default
     #[serde(default)]
-    pub start_durations: Option<String>,
+    pub eta_sample_size: EtaSampleSize,
 
     /// The percentile to use for ETA computation. Should be between 0 and 100.
     /// 

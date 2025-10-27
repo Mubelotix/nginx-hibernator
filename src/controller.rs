@@ -2,12 +2,11 @@ use std::{cmp::max, sync::atomic::{AtomicU64, AtomicUsize, Ordering}, time::Dura
 use chrono::{DateTime, Utc};
 use anyhow::anyhow;
 use log::*;
-use tokio::{fs::{read_to_string, OpenOptions}, io::AsyncWriteExt, sync::{broadcast::{Receiver as BroadReceiver, Sender as BroadSender}, mpsc::{Receiver, Sender}, RwLock}, time::{sleep, Instant}};
-use crate::{checking_symlink, get_last_started, get_last_stopped, is_healthy, mark_stopped, run_command, try_mark_started, SiteConfig};
+use tokio::{fs::read_to_string, sync::{broadcast::{Receiver as BroadReceiver, Sender as BroadSender}, mpsc::{Receiver, Sender}}, time::{sleep, Instant}};
+use crate::{checking_symlink, database::DATABASE, get_last_started, get_last_stopped, is_healthy, mark_stopped, run_command, try_mark_started, SiteConfig};
 
 pub struct SiteController {
     pub config: &'static SiteConfig,
-    start_durations: RwLock<Vec<u64>>,
     state: &'static AtomicUsize,
     state_last_changed: &'static AtomicU64,
     start_sender: Sender<()>,
@@ -19,20 +18,8 @@ impl SiteController {
         let (start_sender, start_receiver) = tokio::sync::mpsc::channel(1);
         let (started_sender, started_receiver) = tokio::sync::broadcast::channel(1);
 
-        let mut start_durations = Vec::new();
-        if let Some(start_durations_file) = &config.start_durations {
-            match read_to_string(start_durations_file).await {
-                Ok(content) => {
-                    start_durations = content.lines().filter_map(|l| l.parse().ok()).collect();
-                    start_durations.sort();
-                },
-                Err(e) => error!("could not open start durations of {}: {e}", config.name),
-            };
-        }
-
         (Self {
             config,
-            start_durations: RwLock::new(start_durations),
             state: Box::leak(Box::new(AtomicUsize::new(0))),
             state_last_changed: Box::leak(Box::new(AtomicU64::new(0))),
             start_sender,
@@ -40,12 +27,12 @@ impl SiteController {
         }, start_receiver, started_sender)
     }
 
-    pub async fn trigger_start(&self) {
+    pub fn trigger_start(&self) {
         let _ = self.start_sender.try_send(()); // We don't care about the error because if this fails, that means the site was already requested to be started
     }
 
     pub async fn waiting_trigger_start(&self) {
-        self.trigger_start().await;
+        self.trigger_start();
         let mut started_receiver = self.started_receiver.resubscribe();
         let _ = started_receiver.recv().await;
     }
@@ -122,29 +109,31 @@ impl SiteController {
     }
 
     #[allow(clippy::question_mark)]
-    pub async fn get_progress(&self) -> Option<(u64, u64)> {
-        if self.config.start_durations.is_none() {
+    pub async fn get_progress(&self) -> Option<(Duration, Duration)> {
+        if self.config.eta_sample_size.0 == 0 {
+            trace!("ETA disabled");
             return None;
         }
-
-        let (state, last_changed_ms) = self.get_state_with_last_changed_ms();
-        if state != SiteState::Starting {
-            return None;
-        }
-        
-        let start_durations = self.start_durations.read().await;
-        if start_durations.is_empty() {
-            return None;
-        }
-        
-        let eta_percentile = self.config.eta_percentile.0;
-        let idx = start_durations.len() * eta_percentile / 100;     
-        let estimated_duration = start_durations[idx];
 
         let now_ms = Utc::now().timestamp_millis() as u64;
-        let done = now_ms - last_changed_ms;
+        let (state, mut last_changed_ms) = self.get_state_with_last_changed_ms();
+        if state != SiteState::Starting {
+            trace!("Site was not starting");
+            last_changed_ms = now_ms;
+        }
 
-        Some((done, estimated_duration))
+        let done = now_ms - last_changed_ms;
+        let done = Duration::from_millis(done);
+
+        let duration_estimate = match DATABASE.get_start_duration_estimate(&self.config.name, self.config.eta_percentile.0) {
+            Ok(duration_estimate) => duration_estimate,
+            Err(e) => {
+                warn!("Couldn't get duration estimate: {e}");
+                return None;
+            }
+        };
+
+        Some((done, duration_estimate))
     }
 
     async fn should_shutdown(&self) -> anyhow::Result<ShouldShutdown> {
@@ -301,28 +290,6 @@ impl SiteController {
         }
     }
 
-    async fn save_start_duration(&self, duration: Duration) {
-        let start_duration = duration.as_millis() as u64;
-        let mut start_durations = self.start_durations.write().await;
-        let idx = start_durations.binary_search(&start_duration).unwrap_or_else(|e| e);
-        start_durations.insert(idx, start_duration);
-
-        let start_durations_file = match self.config.start_durations.as_ref() {
-            Some(start_durations_file) => start_durations_file,
-            None => return,
-        };
-
-        let mut file = OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(start_durations_file).await
-            .expect("could not open start durations file");
-        let r = file.write_all(format!("{start_duration}\n").as_bytes()).await;
-        if let Err(e) = r {
-            error!("could not write start duration to file: {e}");
-        }
-    }
-
     async fn start(&self, started_sender: &BroadSender<()>) {    
         // Start the server
         if !try_mark_started(self.config).await {
@@ -357,7 +324,9 @@ impl SiteController {
 
         // Log the start duration
         if state == SiteState::Up {
-            self.save_start_duration(end - start).await;
+            if let Err(e) = DATABASE.put_start_duration(&self.config.name, end - start, self.config.eta_sample_size.0) {
+                error!("Couldn't store start duration: {e}");
+            }
         }
     }
 

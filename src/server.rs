@@ -165,8 +165,8 @@ async fn handle_connection(mut stream: TcpStream) -> ConnectionMetadata {
     if !should_be_processed(controller.config, path, real_ip) {
         debug!("Client shall not be served");
         let status_line = "HTTP/1.1 503 Service Unavailable";
-        let retry_after = controller.get_progress().await.and_then(|(done_ms, duration_ms)| {
-            let remaining = duration_ms.checked_sub(done_ms).unwrap_or_default() / 1000;
+        let retry_after = controller.get_progress().await.and_then(|(done, duration)| {
+            let remaining = duration.checked_sub(done).unwrap_or_default().as_secs();
             if remaining > 0 { Some(format!("Retry-After: {remaining}\r\n")) } else { None }
         }).unwrap_or_default();
         let content = "Server is unavailable";
@@ -192,13 +192,13 @@ async fn handle_connection(mut stream: TcpStream) -> ConnectionMetadata {
     if !should_proxy {
         debug!("Returning 503 right away");
         let status_line = "HTTP/1.1 503 Service Unavailable";
-        let (retry_after, done_ms, duration_ms) = controller.get_progress().await.and_then(|(done_ms, duration_ms)| {
-            let remaining = duration_ms.checked_sub(done_ms).unwrap_or_default() / 1000;
-            if remaining > 0 { Some((format!("Retry-After: {remaining}\r\n"), done_ms, duration_ms)) } else { None }
+        let (retry_after, done, duration) = controller.get_progress().await.and_then(|(done, duration)| {
+            let remaining = duration.checked_sub(done).unwrap_or_default().as_secs();
+            if remaining > 0 { Some((format!("Retry-After: {remaining}\r\n"), done, duration)) } else { None }
         }).unwrap_or_default();
         let content = include_str!("../static/index.html")
-            .replace("DONE_MS", &done_ms.to_string())
-            .replace("DURATION_MS", &duration_ms.to_string())
+            .replace("DONE_MS", &done.as_millis().to_string())
+            .replace("DURATION_MS", &duration.as_millis().to_string())
             .replace("KEEP_ALIVE", &controller.config.keep_alive.to_string());
         let length = content.len();
         let response = format!(
@@ -206,7 +206,7 @@ async fn handle_connection(mut stream: TcpStream) -> ConnectionMetadata {
         );
         let _ = stream.write_all(response.as_bytes()).await;
 
-        controller.trigger_start().await;
+        controller.trigger_start();
 
         return ConnectionMetadata::new(http_request, Unproxied);
     }

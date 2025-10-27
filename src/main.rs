@@ -20,7 +20,6 @@ use util::*;
 mod controller;
 use controller::*;
 mod database;
-use database::*;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() { 

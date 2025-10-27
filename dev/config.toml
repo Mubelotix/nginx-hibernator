@@ -5,7 +5,6 @@ hibernator_port = 7878
 [[sites]]
 name = "python_http_proxy"
 nginx_hibernator_config = "/etc/nginx/sites-available/hibernator"
-start_durations = "dev/durations.txt"
 port = 8000
 access_log = "/var/log/nginx/python_http_proxy_access.log"
 service_name = "simple_python_http"
