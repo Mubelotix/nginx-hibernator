@@ -1,9 +1,48 @@
 use std::time::Duration;
-use crate::{get_controller, Config, ProxyMode, SiteConfig};
+use crate::{database::DATABASE, get_controller, util::now, Config, ProxyMode, SiteConfig};
 use log::*;
 use anyhow::anyhow;
+use serde::{Deserialize, Serialize};
 use tokio::{io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader}, net::{TcpListener, TcpStream}, spawn, time::{sleep, timeout}};
 use tokio_stream::{wrappers::LinesStream, StreamExt};
+
+#[derive(Serialize, Deserialize)]
+pub enum ConnectionResult {
+    MissingHost,
+    UnknownSite,
+    Ignored,
+    Unproxied,
+    ProxySuccess,
+    ProxyFailed,
+    ProxyTimeout,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ConnectionMetadata {
+    pub request: Vec<String>,
+    pub result: ConnectionResult
+}
+
+impl ConnectionMetadata {
+    fn new(mut request: Vec<String>, result: ConnectionResult) -> Self {
+        // TODO: Limits used here should be configurable
+        
+        // Only keep lines until empty line
+        if let Some(empty_idx) = request.iter().position(|line| line.is_empty()) {
+            request.drain(empty_idx..request.len());
+        }
+
+        // Only keep 8kB per line
+        for line in &mut request {
+            line.truncate(2_000);
+        }
+
+        // Only keep 30 lines
+        request.truncate(30);
+
+        ConnectionMetadata { request, result }
+    }
+}
 
 pub async fn setup_server(config: &'static Config) {
     let listener = TcpListener::bind(format!("127.0.0.1:{}", config.top_level.hibernator_port())).await.expect("Could not bind to port");
@@ -11,7 +50,13 @@ pub async fn setup_server(config: &'static Config) {
     spawn(async move {
         loop {
             if let Ok((stream, _addr)) = listener.accept().await {
-                spawn(handle_connection(stream));
+                spawn(async move {
+                    let at = now();
+                    let result = handle_connection(stream).await;
+                    if let Err(e) = DATABASE.put_connection_metadata(at, result) {
+                        eprintln!("Couldn't put connection metadata {e}")
+                    }
+                });
             }
         }
     });
@@ -66,7 +111,9 @@ async fn try_proxy(port: u16, head: Vec<String>, body: Vec<u8>) -> anyhow::Resul
 }
 
 // It's ok to panic in this function, as it's only called in its own thread
-async fn handle_connection(mut stream: TcpStream) {
+async fn handle_connection(mut stream: TcpStream) -> ConnectionMetadata {
+    use ConnectionResult::*;
+
     let buf_reader = BufReader::new(&mut stream);
     let http_request: Vec<_> = LinesStream::new(buf_reader.lines())
         .map(|result| result.expect("Could not read request lines"))
@@ -90,7 +137,7 @@ async fn handle_connection(mut stream: TcpStream) {
             let length = content.len();
             let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
             let _ = stream.write_all(response.as_bytes()).await;
-            return;
+            return ConnectionMetadata::new(http_request, MissingHost);
         }
     };
 
@@ -104,7 +151,7 @@ async fn handle_connection(mut stream: TcpStream) {
             let length = content.len();
             let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
             let _ = stream.write_all(response.as_bytes()).await;
-            return;
+            return ConnectionMetadata::new(http_request, UnknownSite);
         }
     };
 
@@ -126,7 +173,7 @@ async fn handle_connection(mut stream: TcpStream) {
         let length = content.len();
         let response = format!("{status_line}\r\nContent-Length: {length}\r\n{retry_after}\r\n{content}");
         let _ = stream.write_all(response.as_bytes()).await;
-        return;
+        return ConnectionMetadata::new(http_request, Ignored);
     }
 
     // Determine if we should attempt to proxy the request
@@ -160,7 +207,8 @@ async fn handle_connection(mut stream: TcpStream) {
         let _ = stream.write_all(response.as_bytes()).await;
 
         controller.trigger_start().await;
-        return;
+
+        return ConnectionMetadata::new(http_request, Unproxied);
     }
 
     let content_lenght = http_request
@@ -172,11 +220,12 @@ async fn handle_connection(mut stream: TcpStream) {
     stream.read_exact(&mut body).await.expect("Could not read request body");
 
     let timeout_duration = Duration::from_millis(controller.config.proxy_timeout_ms.0);
+    let http_request2 = http_request.clone();
     let r = timeout(timeout_duration, async move {
         controller.waiting_trigger_start().await;
         debug!("Site started, waiting for upstream");
         loop {
-            if let Ok(response) = try_proxy(controller.config.port, http_request.clone(), body.clone()).await {
+            if let Ok(response) = try_proxy(controller.config.port, http_request2.clone(), body.clone()).await {
                 debug!("Site {} is ready, got response", controller.config.name);
                 return Ok::<Vec<u8>, anyhow::Error>(response);
             }
@@ -188,6 +237,7 @@ async fn handle_connection(mut stream: TcpStream) {
         Ok(Ok(response)) => {
             debug!("Returning response from upstream");
             let _ = stream.write_all(&response).await;
+            ConnectionMetadata::new(http_request, ProxySuccess)
         },
         Ok(Err(e)) => {
             let status_line = "HTTP/1.1 500 Internal Server Error";
@@ -195,6 +245,7 @@ async fn handle_connection(mut stream: TcpStream) {
             let length = content.len();
             let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
             let _ = stream.write_all(response.as_bytes()).await;
+            ConnectionMetadata::new(http_request, ProxyFailed)
         },
         Err(_) => {
             debug!("Site {} took too long to start", controller.config.name);
@@ -204,6 +255,7 @@ async fn handle_connection(mut stream: TcpStream) {
             let length = content.len();
             let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
             let _ = stream.write_all(response.as_bytes()).await;
+            ConnectionMetadata::new(http_request, ProxyTimeout)
         },
     }
 }

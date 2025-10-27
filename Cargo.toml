@@ -15,3 +15,4 @@ globset = "0.4"
 tokio = { version="1.41", default-features=false, features = ["macros", "rt", "time", "sync", "fs", "io-util", "process", "net"] }
 tokio-stream ={ version="0.1", default-features=false, features = ["io-util"] }
 libc = "0.2.171"
+heed = "0.22"

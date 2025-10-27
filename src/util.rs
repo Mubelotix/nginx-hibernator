@@ -46,3 +46,7 @@ pub async fn run_command(command: &str) -> anyhow::Result<()> {
 
     Ok(())
 }
+
+pub fn now() -> u64 {
+    chrono::Utc::now().timestamp() as u64
+}
