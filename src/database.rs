@@ -4,11 +4,10 @@ use heed::{
     types::{SerdeBincode as Bincoded, Str, U64},
     Database as HeedDatabase, EnvOpenOptions,
 };
-use std::{path::Path, sync::LazyLock, time::Duration};
+use std::{sync::LazyLock, time::Duration};
+use crate::{config::Config, server::ConnectionMetadata};
 
-use crate::server::ConnectionMetadata;
-
-pub static DATABASE: LazyLock<Database> = LazyLock::new(|| Database::open("data.mdb"));
+pub static DATABASE: LazyLock<Database> = LazyLock::new(Database::open);
 
 const LATEST_DB_VERSION: u64 = 0;
 
@@ -19,12 +18,17 @@ pub struct Database {
 }
 
 impl Database {
-    fn open(path: impl AsRef<Path>) -> Self {
-        std::fs::create_dir_all(&path).expect("couldn't create database directory");
+    fn open() -> Self {
+        let config_path = std::env::args().nth(1).unwrap_or(String::from("config.toml"));
+        let config_data = std::fs::read_to_string(config_path).expect("could not read config file");
+        let config: Config = toml::from_str(&config_data).expect("could not parse config file");
+        let path = config.top_level.database_path();
+
+        std::fs::create_dir_all(path).expect("couldn't create database directory");
 
         let env = unsafe {
             EnvOpenOptions::new()
-                .map_size(16 * 4096) // 16 pages
+                .map_size(4096 * 4096) // 16MiB
                 .max_dbs(16)
                 .open(path)
                 .expect("couldn't open database")

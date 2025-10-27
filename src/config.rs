@@ -337,6 +337,12 @@ pub struct TopLevelConfig {
     /// Defaults to `7878`.
     #[serde(default)]
     pub hibernator_port: Option<u16>,
+
+    /// Where to store the database
+    /// 
+    /// Defaults to `./data.mdb`
+    #[serde(default)]
+    pub database_path: Option<String>,
 }
 
 impl TopLevelConfig {
@@ -344,6 +350,13 @@ impl TopLevelConfig {
         match &self.hibernator_port {
             Some(port) => *port,
             None => 7878,
+        }
+    }
+
+    pub fn database_path(&self) -> &str {
+        match &self.database_path {
+            Some(p) => p,
+            None => "./data.mdb"
         }
     }
 }
