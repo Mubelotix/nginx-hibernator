@@ -148,21 +148,6 @@ const getStatusText = (result: ConnectionResult) => {
   }
 }
 
-const parseRequestLine = (request: string[]) => {
-  if (request.length === 0) return { method: '-', url: '-', protocol: '-' }
-  
-  const firstLine = request[0]
-  if (!firstLine) return { method: '-', url: '-', protocol: '-' }
-  
-  const parts = firstLine.split(' ')
-  
-  return {
-    method: parts[0] || '-',
-    url: parts[1] || '-',
-    protocol: parts[2] || '-',
-  }
-}
-
 const formatTime = (timestamp: number) => {
   const date = new Date(timestamp * 1000)
   return date.toLocaleTimeString()
@@ -174,16 +159,6 @@ const selectEntry = (entry: HistoryEntry) => {
 
 const closeSidePanel = () => {
   selectedEntry.value = null
-}
-
-const getHeaders = (request: string[]) => {
-  if (request.length <= 1) return []
-  
-  // Skip the first line (request line) and parse headers
-  // Filter out the X-Real-IP header to avoid redundancy with real_ip field
-  return request.slice(1)
-    .filter(line => line.trim() !== '')
-    .filter(line => !line.toLowerCase().startsWith('x-real-ip:'))
 }
 </script>
 
@@ -219,12 +194,12 @@ const getHeaders = (request: string[]) => {
             >
               <TableCell class="font-mono text-xs">{{ formatTime(entry.timestamp) }}</TableCell>
               <TableCell class="font-mono method-cell">
-                {{ parseRequestLine(entry.request).method }}
+                {{ entry.method }}
                 <span v-if="entry.is_browser" class="browser-badge" title="Browser Request">👤</span>
                 <span v-else class="browser-badge" title="Non-Browser Request">🤖</span>
               </TableCell>
-              <TableCell class="font-mono text-xs url-cell" :title="parseRequestLine(entry.request).url">
-                {{ parseRequestLine(entry.request).url }}
+              <TableCell class="font-mono text-xs url-cell" :title="entry.url">
+                {{ entry.url }}
               </TableCell>
               <TableCell class="font-mono text-xs real-ip-cell">
                 {{ entry.real_ip || '-' }}
@@ -270,7 +245,7 @@ const getHeaders = (request: string[]) => {
           <div class="section">
             <h3>Request Line</h3>
             <div class="request-line">
-              {{ selectedEntry.request[0] }}
+              {{ selectedEntry.method }} {{ selectedEntry.url }}
             </div>
           </div>
 
@@ -279,7 +254,7 @@ const getHeaders = (request: string[]) => {
             <h3>Headers</h3>
             <div class="headers-list">
               <div 
-                v-for="(header, index) in getHeaders(selectedEntry.request)" 
+                v-for="(header, index) in selectedEntry.request" 
                 :key="index"
                 class="header-item"
               >

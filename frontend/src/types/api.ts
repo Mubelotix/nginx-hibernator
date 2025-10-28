@@ -15,6 +15,8 @@ export interface ConnectionMetadata {
   service?: string
   is_browser: boolean
   real_ip?: string
+  method: string
+  url: string
 }
 
 export interface HistoryEntry {
@@ -24,4 +26,6 @@ export interface HistoryEntry {
   service?: string
   is_browser: boolean
   real_ip?: string
+  method: string
+  url: string
 }

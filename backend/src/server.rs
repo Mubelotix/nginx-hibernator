@@ -27,11 +27,32 @@ pub struct ConnectionMetadata {
     pub service: Option<String>,
     pub is_browser: bool,
     pub real_ip: Option<String>,
+    pub method: String,
+    pub url: String,
 }
 
 impl ConnectionMetadata {
     fn new(mut request: Vec<String>, result: ConnectionResult, is_browser: bool, real_ip: Option<String>) -> Self {
         // TODO: Limits used here should be configurable
+        
+        // Extract and remove the request line (method, URL, protocol)
+        let (method, url) = if let Some(first_line) = request.first() {
+            let parts: Vec<&str> = first_line.split_whitespace().collect();
+            let method = parts.get(0).unwrap_or(&"-").to_string();
+            let url = parts.get(1).unwrap_or(&"-").to_string();
+            (method, url)
+        } else {
+            ("-".to_string(), "-".to_string())
+        };
+        
+        // Remove the request line and X-Real-IP header since they're stored separately
+        request.retain(|line| {
+            let line_lower = line.to_lowercase();
+            !line_lower.starts_with("x-real-ip:") && 
+            !line.split_whitespace().collect::<Vec<_>>().get(0).map_or(false, |first| 
+                matches!(*first, "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "HEAD" | "OPTIONS" | "CONNECT" | "TRACE")
+            )
+        });
         
         // Only keep lines until empty line
         if let Some(empty_idx) = request.iter().position(|line| line.is_empty()) {
@@ -46,7 +67,7 @@ impl ConnectionMetadata {
         // Only keep 30 lines
         request.truncate(30);
 
-        ConnectionMetadata { request, result, service: None, is_browser, real_ip: real_ip }
+        ConnectionMetadata { request, result, service: None, is_browser, real_ip, method, url }
     }
 
     fn with_controller(mut self, controller: &SiteController) -> Self {
@@ -61,6 +82,8 @@ impl ConnectionMetadata {
             service: None,
             is_browser: false,
             real_ip: None,
+            method: "-".to_string(),
+            url: "-".to_string(),
         }
     }
 }
@@ -224,8 +247,7 @@ async fn handle_connection(mut stream: TcpStream) -> ConnectionMetadata {
     // Make sure the request should be treated
     let first_line = http_request.first().expect("Request is empty");
     let path = first_line.split_whitespace().nth(1).expect("Request line is empty");
-    let real_ip = real_ip.as_deref();
-    if !should_be_processed(controller.config, path, real_ip) {
+    if !should_be_processed(controller.config, path, real_ip.as_deref()) {
         debug!("Client shall not be served");
         let status_line = "HTTP/1.1 503 Service Unavailable";
         let retry_after = controller.get_progress().await.and_then(|(done, duration)| {
