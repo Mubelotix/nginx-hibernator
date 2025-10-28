@@ -394,8 +394,23 @@ impl Database {
         };
         let mut iter = self.states.rev_range(&rtxn, &(min..=max))?;
 
+        // Get the most recent state
         if let Some((key, state)) = iter.next().transpose()? {
-            Ok((state, key.timestamp))
+            let current_state = state;
+            let mut start_time = key.timestamp;
+            
+            // Iterate backwards to find when this state actually started
+            while let Some((key, prev_state)) = iter.next().transpose()? {
+                if prev_state == current_state {
+                    // Same state continues further back
+                    start_time = key.timestamp;
+                } else {
+                    // State changed, we found the start
+                    break;
+                }
+            }
+            
+            Ok((current_state, start_time))
         } else {
             Err(anyhow!("No state found"))
         }

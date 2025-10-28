@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{cmp::max, time::Duration};
 
 use chrono::{DateTime, Utc};
 use anyhow::anyhow;
@@ -209,26 +209,20 @@ impl SiteController {
             break date.with_timezone(&Utc)
         };
     
-        // TODO: Add cooldown checks again
-        // Calculate the last action timestamp
-        // let mut last_action = last_request.timestamp() as u64;
-        // trace!("Last request was at {}", last_action);
-        // if let Some(last_started) = get_last_started(&self.config.name).await {
-        //     trace!("Last started was at {}", last_started);
-        //     last_action = max(last_action, last_started);
-        // }
-        // if let Some(last_stopped) = get_last_stopped(&self.config.name).await {
-        //     trace!("Last stopped was at {}", last_stopped);
-        //     last_action = max(last_action, last_stopped);
-        // }
+        // Calculate the last action timestamp, taking into account state changes
+        let mut last_action = last_request;
+        let (state, last_state_change) = self.get_state_with_last_changed();
+        if state != SiteState::Unknown {
+            last_action = max(last_action, last_state_change);
+        }
         
         // Check if the site should be shut down
-        let time_since = now.signed_duration_since(last_request);
+        let time_since = now.signed_duration_since(last_action);
         if time_since.num_seconds() > self.config.keep_alive as i64 {
             debug!("Site {} should be shut down now", self.config.name);
             Ok(ShouldShutdown::Now)
         } else {
-            let next_check = last_request + Duration::from_secs(self.config.keep_alive + 1);
+            let next_check = last_action + Duration::from_secs(self.config.keep_alive + 1);
             debug!("Site {} should not be shut down until {next_check}", self.config.name);
             Ok(ShouldShutdown::NotUntil(next_check))
         }
