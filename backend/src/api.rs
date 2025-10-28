@@ -69,8 +69,7 @@ pub async fn handle_service_config_request(mut stream: TcpStream, service_name: 
         }
     };
 
-    let config = serde_json::to_value(&controller.config).unwrap(); // FIXME
-    let content = serde_json::to_string(&config).unwrap(); // FIXME
+    let content = serde_json::to_string(&controller.config).unwrap(); // FIXME
 
     let status_line = "HTTP/1.1 200 OK";
     let length = content.len();

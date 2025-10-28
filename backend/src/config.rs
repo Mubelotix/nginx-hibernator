@@ -163,7 +163,11 @@ impl Default for EtaPercentile {
     }
 }
 
-pub struct GlobWrapper(pub GlobMatcher);
+pub struct GlobWrapper {
+    pattern: String,
+    matcher: GlobMatcher,
+}
+
 impl<'de> Deserialize<'de> for GlobWrapper {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
         let s = String::deserialize(deserializer)?;
@@ -177,7 +181,10 @@ impl<'de> Deserialize<'de> for GlobWrapper {
             .map_err(de::Error::custom)?
             .compile_matcher();
 
-        Ok(GlobWrapper(glob))
+        Ok(GlobWrapper {
+            pattern: s,
+            matcher: glob,
+        })
     }
 }
 
@@ -186,13 +193,13 @@ impl Serialize for GlobWrapper {
     where
         S: Serializer,
     {
-        serializer.serialize_str(&format!("{:?}", self.0))
+        serializer.serialize_str(&self.pattern)
     }
 }
 
 impl fmt::Debug for GlobWrapper {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
+        write!(f, "GlobWrapper(\"{}\")", self.pattern)
     }
 }
 
@@ -200,7 +207,7 @@ impl Deref for GlobWrapper {
     type Target = GlobMatcher;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.matcher
     }
 }
 
