@@ -27,11 +27,15 @@ const menuItems = [
     icon: LayoutDashboard,
     path: '/',
   },
+  {
+    title: 'All Logs',
+    icon: FileText,
+    path: '/logs',
+  },
 ]
 
 const services = ref<ServiceInfo[]>([])
-const servicesExpanded = ref(true)
-const logsExpanded = ref(true)
+const expandedServices = ref<Set<string>>(new Set())
 let refreshInterval: number | null = null
 
 const fetchServices = async () => {
@@ -47,12 +51,16 @@ const fetchServices = async () => {
   }
 }
 
-const toggleServices = () => {
-  servicesExpanded.value = !servicesExpanded.value
+const toggleService = (serviceName: string) => {
+  if (expandedServices.value.has(serviceName)) {
+    expandedServices.value.delete(serviceName)
+  } else {
+    expandedServices.value.add(serviceName)
+  }
 }
 
-const toggleLogs = () => {
-  logsExpanded.value = !logsExpanded.value
+const isServiceExpanded = (serviceName: string) => {
+  return expandedServices.value.has(serviceName)
 }
 
 onMounted(() => {
@@ -90,69 +98,39 @@ onUnmounted(() => {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        <SidebarGroup>
-          <SidebarGroupLabel @click="toggleLogs" class="cursor-pointer">
-            <div class="flex items-center justify-between w-full">
-              <div class="flex items-center gap-2">
-                <FileText :size="16" />
-                <span>Logs</span>
-              </div>
-              <ChevronRight 
-                :size="16" 
-                :class="{ 'rotate-90': logsExpanded }"
-                class="transition-transform"
-              />
-            </div>
-          </SidebarGroupLabel>
-          <SidebarGroupContent v-if="logsExpanded">
-            <SidebarMenuSub>
-              <SidebarMenuSubItem>
-                <SidebarMenuSubButton
-                  as-child
-                  :is-active="route.path === '/logs'"
-                >
-                  <router-link to="/logs">
-                    <span>All Services</span>
-                  </router-link>
-                </SidebarMenuSubButton>
-              </SidebarMenuSubItem>
-              <SidebarMenuSubItem v-for="service in services" :key="`log-${service.name}`">
-                <SidebarMenuSubButton
-                  as-child
-                  :is-active="route.path === `/logs/${service.name}`"
-                >
-                  <router-link :to="`/logs/${service.name}`">
-                    <span>{{ service.name }}</span>
-                  </router-link>
-                </SidebarMenuSubButton>
-              </SidebarMenuSubItem>
-            </SidebarMenuSub>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        <SidebarGroup>
-          <SidebarGroupLabel @click="toggleServices" class="cursor-pointer">
+        <SidebarGroup v-for="service in services" :key="service.name">
+          <SidebarGroupLabel @click="toggleService(service.name)" class="cursor-pointer">
             <div class="flex items-center justify-between w-full">
               <div class="flex items-center gap-2">
                 <Server :size="16" />
-                <span>Services</span>
+                <span>{{ service.name }}</span>
               </div>
               <ChevronRight 
                 :size="16" 
-                :class="{ 'rotate-90': servicesExpanded }"
+                :class="{ 'rotate-90': isServiceExpanded(service.name) }"
                 class="transition-transform"
               />
             </div>
           </SidebarGroupLabel>
-          <SidebarGroupContent v-if="servicesExpanded">
+          <SidebarGroupContent v-if="isServiceExpanded(service.name)">
             <SidebarMenuSub>
-              <SidebarMenuSubItem v-for="service in services" :key="service.name">
+              <SidebarMenuSubItem>
                 <SidebarMenuSubButton
                   as-child
                   :is-active="route.path === `/services/${service.name}`"
                 >
                   <router-link :to="`/services/${service.name}`">
-                    <span>{{ service.name }}</span>
+                    <span>Config</span>
+                  </router-link>
+                </SidebarMenuSubButton>
+              </SidebarMenuSubItem>
+              <SidebarMenuSubItem>
+                <SidebarMenuSubButton
+                  as-child
+                  :is-active="route.path === `/logs/${service.name}`"
+                >
+                  <router-link :to="`/logs/${service.name}`">
+                    <span>Logs</span>
                   </router-link>
                 </SidebarMenuSubButton>
               </SidebarMenuSubItem>
