@@ -25,10 +25,12 @@ pub struct ConnectionMetadata {
     pub request: Vec<String>,
     pub result: ConnectionResult,
     pub service: Option<String>,
+    pub is_browser: bool,
+    pub real_ip: Option<String>,
 }
 
 impl ConnectionMetadata {
-    fn new(mut request: Vec<String>, result: ConnectionResult) -> Self {
+    fn new(mut request: Vec<String>, result: ConnectionResult, is_browser: bool, real_ip: Option<String>) -> Self {
         // TODO: Limits used here should be configurable
         
         // Only keep lines until empty line
@@ -44,7 +46,7 @@ impl ConnectionMetadata {
         // Only keep 30 lines
         request.truncate(30);
 
-        ConnectionMetadata { request, result, service: None }
+        ConnectionMetadata { request, result, service: None, is_browser, real_ip: real_ip }
     }
 
     fn with_controller(mut self, controller: &SiteController) -> Self {
@@ -57,6 +59,8 @@ impl ConnectionMetadata {
             request: Vec::new(),
             result: ConnectionResult::ApiHandled,
             service: None,
+            is_browser: false,
+            real_ip: None,
         }
     }
 }
@@ -144,6 +148,13 @@ async fn handle_connection(mut stream: TcpStream) -> ConnectionMetadata {
         .await;
     debug!("Request: {http_request:?}");
 
+    // Extract metadata early
+    let is_browser = http_request.iter().any(|line| line.to_lowercase() == "sec-fetch-mode: navigate");
+    let real_ip = http_request
+        .iter()
+        .find(|line| line.to_lowercase().starts_with("x-real-ip: "))
+        .map(|line| line[11..].to_string());
+
     let first_line = http_request.first().expect("Request is empty");
     let path = first_line.split_whitespace().nth(1).expect("Request line is empty");
     if path.starts_with("/hibernator-api/") {
@@ -157,7 +168,7 @@ async fn handle_connection(mut stream: TcpStream) -> ConnectionMetadata {
                 let length = content.len();
                 let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
                 let _ = stream.write_all(response.as_bytes()).await;
-                return ConnectionMetadata::new(http_request, InvalidUrl);
+                return ConnectionMetadata::new(http_request, InvalidUrl, is_browser, real_ip);
             }
         };
 
@@ -192,7 +203,7 @@ async fn handle_connection(mut stream: TcpStream) -> ConnectionMetadata {
             let length = content.len();
             let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
             let _ = stream.write_all(response.as_bytes()).await;
-            return ConnectionMetadata::new(http_request, MissingHost);
+            return ConnectionMetadata::new(http_request, MissingHost, is_browser, real_ip);
         }
     };
 
@@ -206,17 +217,14 @@ async fn handle_connection(mut stream: TcpStream) -> ConnectionMetadata {
             let length = content.len();
             let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
             let _ = stream.write_all(response.as_bytes()).await;
-            return ConnectionMetadata::new(http_request, UnknownSite);
+            return ConnectionMetadata::new(http_request, UnknownSite, is_browser, real_ip);
         }
     };
 
     // Make sure the request should be treated
     let first_line = http_request.first().expect("Request is empty");
     let path = first_line.split_whitespace().nth(1).expect("Request line is empty");
-    let real_ip = http_request
-        .iter()
-        .find(|line| line.to_lowercase().starts_with("x-real-ip: "))
-        .map(|line| &line[11..]);
+    let real_ip = real_ip.as_deref();
     if !should_be_processed(controller.config, path, real_ip) {
         debug!("Client shall not be served");
         let status_line = "HTTP/1.1 503 Service Unavailable";
@@ -228,11 +236,10 @@ async fn handle_connection(mut stream: TcpStream) -> ConnectionMetadata {
         let length = content.len();
         let response = format!("{status_line}\r\nContent-Length: {length}\r\n{retry_after}\r\n{content}");
         let _ = stream.write_all(response.as_bytes()).await;
-        return ConnectionMetadata::new(http_request, Ignored).with_controller(controller);
+        return ConnectionMetadata::new(http_request, Ignored, is_browser, real_ip).with_controller(controller);
     }
 
     // Determine if we should attempt to proxy the request
-    let is_browser = http_request.iter().any(|line| line.to_lowercase() == "sec-fetch-mode: navigate");
     let proxy_mode = match is_browser {
         true => &controller.config.browser_proxy_mode,
         false => &controller.config.proxy_mode,
@@ -263,7 +270,7 @@ async fn handle_connection(mut stream: TcpStream) -> ConnectionMetadata {
 
         controller.trigger_start();
 
-        return ConnectionMetadata::new(http_request, Unproxied).with_controller(controller);
+        return ConnectionMetadata::new(http_request, Unproxied, is_browser, real_ip.clone()).with_controller(controller);
     }
 
     let content_length = http_request
@@ -292,7 +299,7 @@ async fn handle_connection(mut stream: TcpStream) -> ConnectionMetadata {
         Ok(Ok(response)) => {
             debug!("Returning response from upstream");
             let _ = stream.write_all(&response).await;
-            ConnectionMetadata::new(http_request, ProxySuccess).with_controller(controller)
+            ConnectionMetadata::new(http_request, ProxySuccess, is_browser, real_ip).with_controller(controller)
         },
         Ok(Err(e)) => {
             let status_line = "HTTP/1.1 500 Internal Server Error";
@@ -300,7 +307,7 @@ async fn handle_connection(mut stream: TcpStream) -> ConnectionMetadata {
             let length = content.len();
             let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
             let _ = stream.write_all(response.as_bytes()).await;
-            ConnectionMetadata::new(http_request, ProxyFailed).with_controller(controller)
+            ConnectionMetadata::new(http_request, ProxyFailed, is_browser, real_ip.clone()).with_controller(controller)
         },
         Err(_) => {
             debug!("Site {} took too long to start", controller.config.name);
@@ -310,7 +317,7 @@ async fn handle_connection(mut stream: TcpStream) -> ConnectionMetadata {
             let length = content.len();
             let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
             let _ = stream.write_all(response.as_bytes()).await;
-            ConnectionMetadata::new(http_request, ProxyTimeout).with_controller(controller)
+            ConnectionMetadata::new(http_request, ProxyTimeout, is_browser, real_ip).with_controller(controller)
         },
     }
 }

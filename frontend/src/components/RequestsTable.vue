@@ -180,7 +180,10 @@ const getHeaders = (request: string[]) => {
   if (request.length <= 1) return []
   
   // Skip the first line (request line) and parse headers
-  return request.slice(1).filter(line => line.trim() !== '')
+  // Filter out the X-Real-IP header to avoid redundancy with real_ip field
+  return request.slice(1)
+    .filter(line => line.trim() !== '')
+    .filter(line => !line.toLowerCase().startsWith('x-real-ip:'))
 }
 </script>
 
@@ -201,6 +204,7 @@ const getHeaders = (request: string[]) => {
               <TableHead class="w-[100px]">Time</TableHead>
               <TableHead class="w-[80px]">Method</TableHead>
               <TableHead class="w-[400px]">URL</TableHead>
+              <TableHead class="w-[120px]">IP</TableHead>
               <TableHead class="w-[80px]">Status</TableHead>
               <TableHead class="w-[100px]">Result</TableHead>
               <TableHead class="w-[120px]">Service</TableHead>
@@ -214,9 +218,16 @@ const getHeaders = (request: string[]) => {
               @click="selectEntry(entry)"
             >
               <TableCell class="font-mono text-xs">{{ formatTime(entry.timestamp) }}</TableCell>
-              <TableCell class="font-mono method-cell">{{ parseRequestLine(entry.request).method }}</TableCell>
+              <TableCell class="font-mono method-cell">
+                {{ parseRequestLine(entry.request).method }}
+                <span v-if="entry.is_browser" class="browser-badge" title="Browser Request">👤</span>
+                <span v-else class="browser-badge" title="Non-Browser Request">🤖</span>
+              </TableCell>
               <TableCell class="font-mono text-xs url-cell" :title="parseRequestLine(entry.request).url">
                 {{ parseRequestLine(entry.request).url }}
+              </TableCell>
+              <TableCell class="font-mono text-xs real-ip-cell">
+                {{ entry.real_ip || '-' }}
               </TableCell>
               <TableCell class="font-mono" :class="getStatusClass(entry.result)">
                 {{ getStatusText(entry.result) }}
@@ -284,6 +295,16 @@ const getHeaders = (request: string[]) => {
               <div class="metadata-item">
                 <span class="metadata-label">Timestamp:</span>
                 <span class="metadata-value">{{ new Date(selectedEntry.timestamp * 1000).toLocaleString() }}</span>
+              </div>
+              <div class="metadata-item" v-if="selectedEntry.real_ip">
+                <span class="metadata-label">Original IP:</span>
+                <span class="metadata-value real-ip-highlight">{{ selectedEntry.real_ip }}</span>
+              </div>
+              <div class="metadata-item">
+                <span class="metadata-label">Browser Request:</span>
+                <span class="metadata-value">
+                  {{ selectedEntry.is_browser ? 'Yes 👤' : 'No 🤖' }}
+                </span>
               </div>
               <div class="metadata-item">
                 <span class="metadata-label">Result:</span>
@@ -428,12 +449,25 @@ const getHeaders = (request: string[]) => {
   color: #2563eb;
 }
 
+.browser-badge {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 14px;
+  vertical-align: middle;
+}
+
 .url-cell {
   max-width: 400px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: #1f2937;
+}
+
+.real-ip-cell {
+  font-weight: 600;
+  color: #7c3aed;
+  background-color: #f5f3ff;
 }
 
 .status-success {
@@ -626,5 +660,13 @@ const getHeaders = (request: string[]) => {
   font-size: 12px;
   color: #1f2937;
   flex: 1;
+}
+
+.real-ip-highlight {
+  font-weight: 600;
+  color: #7c3aed;
+  background-color: #f5f3ff;
+  padding: 2px 6px;
+  border-radius: 3px;
 }
 </style>

@@ -1,3 +1,5 @@
+cd backend || true
+
 cargo build
 
 sudo chown root:root dev/config.toml

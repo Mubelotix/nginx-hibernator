@@ -13,6 +13,8 @@ export interface ConnectionMetadata {
   request: string[]
   result: ConnectionResult
   service?: string
+  is_browser: boolean
+  real_ip?: string
 }
 
 export interface HistoryEntry {
@@ -20,4 +22,6 @@ export interface HistoryEntry {
   request: string[]
   result: ConnectionResult
   service?: string
+  is_browser: boolean
+  real_ip?: string
 }
