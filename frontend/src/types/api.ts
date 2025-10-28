@@ -17,6 +17,10 @@ export interface ServiceInfo {
   last_changed: number
 }
 
+export interface ServiceConfig {
+  [key: string]: any
+}
+
 export interface ConnectionMetadata {
   request: string[]
   result: ConnectionResult

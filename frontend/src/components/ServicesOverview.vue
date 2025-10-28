@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import type { ServiceInfo } from '@/types/api'
 
+const router = useRouter()
 const services = ref<ServiceInfo[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)
@@ -23,6 +25,10 @@ const fetchServices = async () => {
     console.error('Failed to fetch services:', e)
     loading.value = false
   }
+}
+
+const navigateToService = (serviceName: string) => {
+  router.push(`/services/${serviceName}`)
 }
 
 const getStateClass = (state: string) => {
@@ -100,13 +106,6 @@ onUnmounted(() => {
 
 <template>
   <div class="services-overview">
-    <div class="services-header">
-      <h2>Services</h2>
-      <button @click="fetchServices" class="refresh-button" :disabled="loading">
-        {{ loading ? 'Refreshing...' : 'Refresh' }}
-      </button>
-    </div>
-
     <div v-if="loading && services.length === 0" class="loading">Loading services...</div>
     <div v-else-if="error" class="error">Error: {{ error }}</div>
     <div v-else-if="services.length === 0" class="empty">No services configured</div>
@@ -116,6 +115,7 @@ onUnmounted(() => {
         :key="service.name"
         class="service-card"
         :class="getStateClass(service.state)"
+        @click="navigateToService(service.name)"
       >
         <div class="service-header">
           <div class="service-name">{{ service.name }}</div>
@@ -136,43 +136,6 @@ onUnmounted(() => {
 .services-overview {
   width: 100%;
   padding: 20px;
-  background: #ffffff;
-  border-bottom: 2px solid #e5e7eb;
-}
-
-.services-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.services-header h2 {
-  font-size: 20px;
-  font-weight: 600;
-  color: #1f2937;
-  margin: 0;
-}
-
-.refresh-button {
-  padding: 6px 12px;
-  background: #3b82f6;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 500;
-  transition: background-color 0.2s;
-}
-
-.refresh-button:hover:not(:disabled) {
-  background: #2563eb;
-}
-
-.refresh-button:disabled {
-  background: #9ca3af;
-  cursor: not-allowed;
 }
 
 .loading,
@@ -200,10 +163,12 @@ onUnmounted(() => {
   border-radius: 8px;
   padding: 16px;
   transition: all 0.2s;
+  cursor: pointer;
 }
 
 .service-card:hover {
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  transform: translateY(-2px);
 }
 
 .service-card.state-up {

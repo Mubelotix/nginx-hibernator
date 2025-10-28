@@ -1,6 +1,6 @@
 use std::{fmt, ops::Deref};
 use globset::{GlobBuilder, GlobMatcher};
-use serde::{de::{self, Visitor}, Deserialize, Deserializer};
+use serde::{de::{self, Visitor}, Deserialize, Deserializer, Serialize, Serializer};
 
 fn deserialize_duration<'de, D>(deserializer: D) -> Result<u64, D::Error> where D: Deserializer<'de> {
     struct DurationString;
@@ -87,7 +87,7 @@ fn deserialize_duration<'de, D>(deserializer: D) -> Result<u64, D::Error> where 
 /// If the server starts in time, the request will be processed out of the box, as if the server had been running.
 /// 
 /// Note: If you are relying on nginx to authenticate users, you might want to disable this feature to avoid users bypassing the authentication.
-#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum ProxyMode {
     /// Proxies all requests.
     #[serde(alias = "always")]
@@ -115,7 +115,7 @@ impl ProxyMode {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Serialize)]
 pub struct ProxyTimeout(pub u64);
 impl Default for ProxyTimeout {
     fn default() -> Self {
@@ -123,7 +123,7 @@ impl Default for ProxyTimeout {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Serialize)]
 pub struct ProxyCheckInterval(pub u64);
 impl Default for ProxyCheckInterval {
     fn default() -> Self {
@@ -131,7 +131,7 @@ impl Default for ProxyCheckInterval {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Serialize)]
 pub struct StartTimeout(pub u64);
 impl Default for StartTimeout {
     fn default() -> Self {
@@ -139,7 +139,7 @@ impl Default for StartTimeout {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Serialize)]
 pub struct StartCheckInterval(pub u64);
 impl Default for StartCheckInterval {
     fn default() -> Self {
@@ -147,7 +147,7 @@ impl Default for StartCheckInterval {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Serialize)]
 pub struct EtaSampleSize(pub usize);
 impl Default for EtaSampleSize {
     fn default() -> Self {
@@ -155,7 +155,7 @@ impl Default for EtaSampleSize {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Serialize)]
 pub struct EtaPercentile(pub usize);
 impl Default for EtaPercentile {
     fn default() -> Self {
@@ -181,6 +181,15 @@ impl<'de> Deserialize<'de> for GlobWrapper {
     }
 }
 
+impl Serialize for GlobWrapper {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&format!("{:?}", self.0))
+    }
+}
+
 impl fmt::Debug for GlobWrapper {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
@@ -195,7 +204,7 @@ impl Deref for GlobWrapper {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct SiteConfig {
     /// The name of the site. Must be unique.
     pub name: String,

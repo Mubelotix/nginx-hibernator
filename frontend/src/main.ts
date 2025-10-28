@@ -5,6 +5,7 @@ import App from './App.vue'
 import AppLayout from './components/AppLayout.vue'
 import Dashboard from './components/Dashboard.vue'
 import Logs from './components/Logs.vue'
+import ServiceDetail from './components/ServiceDetail.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -20,6 +21,10 @@ const router = createRouter({
         {
           path: 'logs',
           component: Logs,
+        },
+        {
+          path: 'services/:name',
+          component: ServiceDetail,
         },
       ],
     },

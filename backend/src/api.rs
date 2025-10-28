@@ -48,6 +48,36 @@ pub async fn handle_services_request(mut stream: TcpStream) {
     let _ = stream.write_all(response.as_bytes()).await;
 }
 
+pub async fn handle_service_config_request(mut stream: TcpStream, service_name: &str) {
+    trace!("Handling service config request for: {}", service_name);
+
+    // SAFETY: This is safe because SITE_CONTROLLERS is only mutated once during initialization
+    #[allow(static_mut_refs)]
+    let controller = unsafe {
+        SITE_CONTROLLERS.iter().find(|controller| controller.config.name == service_name)
+    };
+
+    let controller = match controller {
+        Some(controller) => controller,
+        None => {
+            let status_line = "HTTP/1.1 404 Not Found";
+            let content = format!("Service '{}' not found", service_name);
+            let length = content.len();
+            let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
+            let _ = stream.write_all(response.as_bytes()).await;
+            return;
+        }
+    };
+
+    let config = serde_json::to_value(&controller.config).unwrap(); // FIXME
+    let content = serde_json::to_string(&config).unwrap(); // FIXME
+
+    let status_line = "HTTP/1.1 200 OK";
+    let length = content.len();
+    let response = format!("{status_line}\r\nContent-Length: {length}\r\nContent-Type: application/json\r\n\r\n{content}");
+    let _ = stream.write_all(response.as_bytes()).await;
+}
+
 pub async fn handle_history_request(mut stream: TcpStream, url: &Url) {
     trace!("Handling history request: {}", url);
 
