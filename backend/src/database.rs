@@ -146,7 +146,7 @@ impl Database {
 
         let min = StateChangeKey {
             service: name.to_string(),
-            timestamp: DateTime::from_timestamp_nanos(i64::MIN),
+            timestamp: DateTime::from_timestamp_nanos(0),
         };
         let max = StateChangeKey {
             service: name.to_string(),
