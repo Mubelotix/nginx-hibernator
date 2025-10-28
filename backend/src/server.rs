@@ -1,5 +1,5 @@
 use std::time::Duration;
-use crate::{Config, ProxyMode, SiteConfig, api::handle_history_request, controller::SiteController, database::DATABASE, get_controller, util::now};
+use crate::{Config, ProxyMode, SiteConfig, api::{handle_history_request, handle_services_request}, controller::SiteController, database::DATABASE, get_controller, util::now};
 use log::*;
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
@@ -196,6 +196,12 @@ async fn handle_connection(mut stream: TcpStream) -> ConnectionMetadata {
         };
 
         let segments: Vec<_> = url.path_segments().map(|c| c.collect()).unwrap_or_default();
+
+        // GET /hibernator-api/services
+        if segments.len() == 2 && segments[0] == "hibernator-api" && segments[1] == "services" {
+            handle_services_request(stream).await;
+            return ConnectionMetadata::api_handled();
+        }
 
         // GET /hibernator-api/history
         if segments.len() == 2 && segments[0] == "hibernator-api" && segments[1] == "history" {

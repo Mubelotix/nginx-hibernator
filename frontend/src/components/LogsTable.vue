@@ -163,9 +163,9 @@ const closeSidePanel = () => {
 </script>
 
 <template>
-  <div class="requests-container">
-    <div class="requests-header">
-      <h1>Request History</h1>
+  <div class="logs-container">
+    <div class="logs-header">
+      <h2>Request Logs</h2>
       <button @click="refresh" class="refresh-button">Refresh</button>
     </div>
 
@@ -302,7 +302,7 @@ const closeSidePanel = () => {
 </template>
 
 <style scoped>
-.requests-container {
+.logs-container {
   width: 100%;
   max-width: 100%;
   padding: 20px;
@@ -310,7 +310,7 @@ const closeSidePanel = () => {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
 }
 
-.requests-header {
+.logs-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -319,8 +319,8 @@ const closeSidePanel = () => {
   border-bottom: 1px solid #e5e7eb;
 }
 
-.requests-header h1 {
-  font-size: 18px;
+.logs-header h2 {
+  font-size: 20px;
   font-weight: 600;
   color: #1f2937;
   margin: 0;

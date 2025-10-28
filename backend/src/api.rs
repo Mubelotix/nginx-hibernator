@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncWriteExt, net::TcpStream};
 use url::Url;
-use crate::{database::DATABASE, server::ConnectionMetadata};
+use crate::{controller::SITE_CONTROLLERS, database::DATABASE, server::ConnectionMetadata};
 use log::*;
 
 #[derive(Serialize, Deserialize)]
@@ -9,6 +9,43 @@ pub struct HistoryEntry {
     pub timestamp: u64,
     #[serde(flatten)]
     pub metadata: ConnectionMetadata,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ServiceInfo {
+    pub name: String,
+    pub state: String,
+    pub last_changed: u64,
+}
+
+pub async fn handle_services_request(mut stream: TcpStream) {
+    trace!("Handling services request");
+
+    // SAFETY: This is safe because SITE_CONTROLLERS is only mutated once during initialization
+    #[allow(static_mut_refs)]
+    let services: Vec<ServiceInfo> = unsafe {
+        SITE_CONTROLLERS.iter().map(|controller| {
+            let (state, last_changed) = controller.get_state_with_last_changed();
+            let state_str = match state {
+                crate::controller::SiteState::Unknown => "unknown",
+                crate::controller::SiteState::Down => "down",
+                crate::controller::SiteState::Up => "up",
+                crate::controller::SiteState::Starting => "starting",
+            };
+            ServiceInfo {
+                name: controller.config.name.to_string(),
+                state: state_str.to_string(),
+                last_changed,
+            }
+        }).collect()
+    };
+
+    let content = serde_json::to_string(&services).unwrap(); // FIXME
+
+    let status_line = "HTTP/1.1 200 OK";
+    let length = content.len();
+    let response = format!("{status_line}\r\nContent-Length: {length}\r\nContent-Type: application/json\r\n\r\n{content}");
+    let _ = stream.write_all(response.as_bytes()).await;
 }
 
 pub async fn handle_history_request(mut stream: TcpStream, url: &Url) {

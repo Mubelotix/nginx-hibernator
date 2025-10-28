@@ -2,14 +2,14 @@ import { createApp } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
 import './style.css'
 import App from './App.vue'
-import RequestsTable from './components/RequestsTable.vue'
+import Dashboard from './components/Dashboard.vue'
 
 const router = createRouter({
   history: createWebHistory(),
   routes: [
     {
       path: '/',
-      component: RequestsTable,
+      component: Dashboard,
     },
   ],
 })

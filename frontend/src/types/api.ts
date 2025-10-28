@@ -9,6 +9,14 @@ export type ConnectionResult =
   | 'ProxyTimeout'
   | 'ApiHandled'
 
+export type ServiceState = 'unknown' | 'down' | 'up' | 'starting'
+
+export interface ServiceInfo {
+  name: string
+  state: ServiceState
+  last_changed: number
+}
+
 export interface ConnectionMetadata {
   request: string[]
   result: ConnectionResult
