@@ -93,51 +93,54 @@ impl Database {
         Ok(())
     }
 
-    pub fn get_history(&self, service: Option<&str>, before: u64, min_results: usize) -> AnyResult<Vec<(u64, ConnectionMetadata)>> {
+    pub fn get_history(&self, service: Option<&str>, before: Option<u64>, after: Option<u64>, min_results: usize) -> AnyResult<Vec<(u64, ConnectionMetadata)>> {
         let rtxn = self.env.read_txn()?;
 
         let mut results = Vec::new();
 
-        let mut iter = self.connections.rev_range(&rtxn, &(0..before))?;
-        while let Some((at, metadatas)) = iter.next().transpose()? {
-            for metadata in metadatas {
-                if service.is_some() && metadata.service.as_deref() != service {
-                    continue;
+        match (before, after) {
+            (Some(before), None) => {
+                // Query backwards from 'before' timestamp
+                let mut iter = self.connections.rev_range(&rtxn, &(0..before))?;
+                while let Some((at, metadatas)) = iter.next().transpose()? {
+                    for metadata in metadatas {
+                        if service.is_some() && metadata.service.as_deref() != service {
+                            continue;
+                        }
+
+                        results.push((at, metadata));
+                    }
+
+                    if results.len() >= min_results {
+                        return Ok(results);
+                    }
+                }
+            }
+            (None, Some(after)) => {
+                // Query forwards from 'after' timestamp
+                let mut iter = self.connections.range(&rtxn, &((after + 1)..u64::MAX))?;
+                while let Some((at, metadatas)) = iter.next().transpose()? {
+                    for metadata in metadatas {
+                        if service.is_some() && metadata.service.as_deref() != service {
+                            continue;
+                        }
+
+                        results.push((at, metadata));
+                    }
+
+                    if results.len() >= min_results {
+                        break;
+                    }
                 }
 
-                results.push((at, metadata));
+                // Reverse to show newest first
+                results.reverse();
             }
-
-            if results.len() >= min_results {
-                return Ok(results);
+            _ => {
+                return Err(anyhow!("Must specify either 'before' or 'after', but not both"));
             }
         }
 
-        Ok(results)
-    }
-
-    pub fn get_history_after(&self, service: Option<&str>, after: u64, min_results: usize) -> AnyResult<Vec<(u64, ConnectionMetadata)>> {
-        let rtxn = self.env.read_txn()?;
-
-        let mut results = Vec::new();
-
-        let mut iter = self.connections.range(&rtxn, &((after + 1)..u64::MAX))?;
-        while let Some((at, metadatas)) = iter.next().transpose()? {
-            for metadata in metadatas {
-                if service.is_some() && metadata.service.as_deref() != service {
-                    continue;
-                }
-
-                results.push((at, metadata));
-            }
-
-            if results.len() >= min_results {
-                break;
-            }
-        }
-
-        // Reverse to show newest first
-        results.reverse();
         Ok(results)
     }
 
