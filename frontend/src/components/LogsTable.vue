@@ -135,6 +135,7 @@ const getStatusText = (result: ConnectionResult) => {
     case 'ProxyFailed':
       return '502'
     case 'Unproxied':
+    case 'Ignored':
       return '503'
     case 'ProxyTimeout':
       return '504'
