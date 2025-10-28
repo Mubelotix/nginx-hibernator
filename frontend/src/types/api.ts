@@ -47,3 +47,10 @@ export interface StateHistoryEntry {
   service: string
   state: ServiceState
 }
+
+export interface ServiceMetrics {
+  uptime_percentage: number
+  total_hibernations: number
+  start_times_histogram: number[] // Buckets: [0-1s, 1-5s, 5-10s, 10-30s, 30s+]
+  start_duration_estimate_ms: number | null
+}

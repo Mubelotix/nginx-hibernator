@@ -123,6 +123,16 @@ onUnmounted(() => {
               <SidebarMenuSubItem>
                 <SidebarMenuSubButton
                   as-child
+                  :is-active="route.path === `/services/${service.name}/dashboard`"
+                >
+                  <router-link :to="`/services/${service.name}/dashboard`">
+                    <span>Dashboard</span>
+                  </router-link>
+                </SidebarMenuSubButton>
+              </SidebarMenuSubItem>
+              <SidebarMenuSubItem>
+                <SidebarMenuSubButton
+                  as-child
                   :is-active="route.path === `/services/${service.name}/config`"
                 >
                   <router-link :to="`/services/${service.name}/config`">

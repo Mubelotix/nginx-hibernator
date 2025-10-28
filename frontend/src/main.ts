@@ -6,6 +6,7 @@ import AppLayout from './components/AppLayout.vue'
 import Dashboard from './components/Dashboard.vue'
 import Network from './components/Network.vue'
 import ServiceDetail from './components/ServiceDetail.vue'
+import ServiceDashboard from './components/ServiceDashboard.vue'
 import ServiceStates from './components/ServiceStates.vue'
 
 const router = createRouter({
@@ -26,6 +27,10 @@ const router = createRouter({
         {
           path: 'states',
           component: ServiceStates,
+        },
+        {
+          path: 'services/:name/dashboard',
+          component: ServiceDashboard,
         },
         {
           path: 'services/:name/config',

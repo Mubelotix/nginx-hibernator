@@ -177,7 +177,7 @@ impl Database {
                         timestamp: DateTime::from_timestamp_nanos(0),
                     };
                     let max = StateChangeKey {
-                        service: "\u{10FFFF}".repeat(100), // Max unicode string
+                        service: "\u{10FFFF}".repeat(100), // Max unicode string FIXME
                         timestamp: before,
                     };
                     let mut iter = self.states.rev_range(&rtxn, &(min..max))?;
@@ -220,7 +220,7 @@ impl Database {
                         timestamp: after,
                     };
                     let max = StateChangeKey {
-                        service: "\u{10FFFF}".repeat(100), // Max unicode string
+                        service: "\u{10FFFF}".repeat(100), // Max unicode string FIXME
                         timestamp: DateTime::from_timestamp_nanos(i64::MAX),
                     };
                     let mut iter = self.states.range(&rtxn, &(min..max))?;
@@ -243,6 +243,35 @@ impl Database {
                 return Err(anyhow!("Must specify either 'before' or 'after', but not both"));
             }
         }
+
+        Ok(results)
+    }
+
+    pub fn get_state_history_since(&self, service: &str, since: DateTime<Utc>) -> AnyResult<Vec<(DateTime<Utc>, SiteState)>> {
+        let rtxn = self.env.read_txn()?;
+
+        let mut results = Vec::new();
+
+        let min = StateChangeKey {
+            service: service.to_string(),
+            timestamp: DateTime::from_timestamp_nanos(0),
+        };
+        let max = StateChangeKey {
+            service: service.to_string(),
+            timestamp: DateTime::from_timestamp_nanos(i64::MAX),
+        };
+        let mut iter = self.states.rev_range(&rtxn, &(min..max))?;
+        
+        while let Some((key, state)) = iter.next().transpose()? {
+            if key.timestamp < since {
+                results.push((since, state));
+                break;
+            } else {
+                results.push((key.timestamp, state));
+            }
+        }
+
+        results.reverse();
 
         Ok(results)
     }

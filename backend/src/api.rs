@@ -1,9 +1,10 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc, Duration};
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncWriteExt, net::TcpStream};
 use url::Url;
 use crate::{controller::{SiteState, SITE_CONTROLLERS}, database::DATABASE, server::ConnectionMetadata};
 use log::*;
+use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize)]
 pub struct HistoryEntry {
@@ -26,6 +27,14 @@ pub struct ServiceInfo {
     pub state: String,
     #[serde(with = "chrono::serde::ts_seconds")]
     pub last_changed: DateTime<Utc>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ServiceMetrics {
+    pub uptime_percentage: f64,
+    pub total_hibernations: usize,
+    pub start_times_histogram: Vec<u64>, // Buckets of start times in milliseconds
+    pub start_duration_estimate_ms: Option<u64>, // From get_start_duration_estimate
 }
 
 pub async fn handle_services_request(mut stream: TcpStream) {
@@ -145,6 +154,136 @@ pub async fn handle_state_history_request(mut stream: TcpStream, url: &Url) {
     }).collect::<Vec<_>>();
 
     let content = serde_json::to_string(&entries).unwrap(); // FIXME
+
+    let status_line = "HTTP/1.1 200 OK";
+    let length = content.len();
+    let response = format!("{status_line}\r\nContent-Length: {length}\r\nContent-Type: application/json\r\n\r\n{content}");
+    let _ = stream.write_all(response.as_bytes()).await;
+}
+
+pub async fn handle_metrics_request(mut stream: TcpStream, service_name: &str, url: &Url) {
+    trace!("Handling metrics request for: {}", service_name);
+
+    // Parse the 'seconds' query parameter (default to 86400 = 24 hours)
+    let query_pairs: HashMap<_, _> = url.query_pairs().into_owned().collect();
+    let seconds = query_pairs
+        .get("seconds")
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(86400);
+
+    // SAFETY: This is safe because SITE_CONTROLLERS is only mutated once during initialization
+    #[allow(static_mut_refs)]
+    let controller = unsafe {
+        SITE_CONTROLLERS.iter().find(|controller| controller.config.name == service_name)
+    };
+
+    let controller = match controller {
+        Some(controller) => controller,
+        None => {
+            let status_line = "HTTP/1.1 404 Not Found";
+            let content = format!("Service '{}' not found", service_name);
+            let length = content.len();
+            let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
+            let _ = stream.write_all(response.as_bytes()).await;
+            return;
+        }
+    };
+
+    let now = Utc::now();
+    let since = now - Duration::seconds(seconds);
+
+    // Get state history for the time period
+    let mut state_history = match DATABASE.get_state_history_since(service_name, since) {
+        Ok(history) => history,
+        Err(e) => {
+            error!("Error fetching state history: {}", e);
+            let status_line = "HTTP/1.1 500 Internal Server Error";
+            let content = format!("Error fetching metrics: {}", e);
+            let length = content.len();
+            let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
+            let _ = stream.write_all(response.as_bytes()).await;
+            return;
+        }
+    };
+
+    // Duplicate the last element with current time
+    if let Some((last_timestamp, last_state)) = state_history.last().cloned() {
+        if last_timestamp < now {
+            state_history.push((now, last_state));
+        }
+    }
+
+    // Calculate uptime percentage and hibernations
+    let mut total_uptime_ms = 0;
+    let mut total_period_ms = 0;
+    let mut total_hibernations = 0;
+    let mut start_durations_ms = Vec::new();
+
+    for i in 0..(state_history.len() - 1) {
+        let (timestamp1, state1) = &state_history[i];
+        let (timestamp2, state2) = &state_history[i + 1];
+        let duration_ms = (timestamp2.timestamp_millis() - timestamp1.timestamp_millis()) as u64;
+
+        match (state1, state2) {
+            (SiteState::Unknown, _) | (_, SiteState::Unknown) => (),
+            (SiteState::Down | SiteState::Starting, SiteState::Down | SiteState::Starting) => {
+                // Stayed down
+                total_period_ms += duration_ms;
+            },
+            (SiteState::Down | SiteState::Starting, SiteState::Up) => {
+                // Went up
+                total_period_ms += duration_ms;
+
+                if state1 == &SiteState::Starting {
+                            println!("Duration between {} and {} is {} ms", timestamp1, timestamp2, duration_ms);
+
+                    // Record start duration
+                    start_durations_ms.push(duration_ms);
+                }
+            },
+            (SiteState::Up, SiteState::Down | SiteState::Starting) => {
+                // Went down
+                total_period_ms += duration_ms;
+                total_uptime_ms += duration_ms;
+                total_hibernations += 1;
+            }
+            (SiteState::Up, SiteState::Up) => {
+                // Stayed up
+                total_period_ms += duration_ms;
+                total_uptime_ms += duration_ms;
+            }
+        }
+    }
+
+    let uptime_percentage = if total_period_ms > 0 {
+        (total_uptime_ms as f64 / total_period_ms as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    // Create histogram with buckets (0-1s, 1-5s, 5-10s, 10-30s, 30s+)
+    let histogram = vec![
+        start_durations_ms.iter().filter(|&&d| d < 1000).count() as u64,
+        start_durations_ms.iter().filter(|&&d| d >= 1000 && d < 5000).count() as u64,
+        start_durations_ms.iter().filter(|&&d| d >= 5000 && d < 10000).count() as u64,
+        start_durations_ms.iter().filter(|&&d| d >= 10000 && d < 30000).count() as u64,
+        start_durations_ms.iter().filter(|&&d| d >= 30000).count() as u64,
+    ];
+
+    // Get start duration estimate from database
+    let start_duration_estimate_ms = DATABASE
+        .get_start_duration_estimate(service_name, controller.config.eta_percentile.0)
+        .ok()
+        .map(|d| d.as_millis() as u64);
+
+    let metrics = ServiceMetrics {
+        uptime_percentage,
+        total_hibernations,
+        start_times_histogram: histogram,
+        start_duration_estimate_ms,
+    };
+
+    let content = serde_json::to_string(&metrics).unwrap(); // FIXME
 
     let status_line = "HTTP/1.1 200 OK";
     let length = content.len();
