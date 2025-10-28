@@ -10,7 +10,7 @@ const route = useRoute()
 const serviceName = computed(() => route.params.name as string)
 
 const breadcrumbs = computed(() => [
-  { label: formatServiceName(serviceName.value), to: `/services/${serviceName.value}` },
+  { label: formatServiceName(serviceName.value) },
   { label: 'Config' }
 ])
 

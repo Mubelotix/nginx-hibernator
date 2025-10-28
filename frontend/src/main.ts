@@ -23,12 +23,12 @@ const router = createRouter({
           component: Logs,
         },
         {
-          path: 'logs/:serviceName',
-          component: Logs,
+          path: 'services/:name/config',
+          component: ServiceDetail,
         },
         {
-          path: 'services/:name',
-          component: ServiceDetail,
+          path: 'services/:name/logs',
+          component: Logs,
         },
       ],
     },

@@ -8,13 +8,13 @@ import { formatServiceName } from '@/lib/utils'
 const route = useRoute()
 
 const serviceName = computed(() => {
-  return route.params.serviceName as string | undefined
+  return route.params.name as string | undefined
 })
 
 const breadcrumbs = computed(() => {
   if (serviceName.value) {
     return [
-      { label: formatServiceName(serviceName.value), to: `/services/${serviceName.value}` },
+      { label: formatServiceName(serviceName.value), to: `/services/${serviceName.value}/config` },
       { label: 'Logs' }
     ]
   } else {
