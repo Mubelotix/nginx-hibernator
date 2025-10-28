@@ -63,6 +63,14 @@ const isServiceExpanded = (serviceName: string) => {
   return expandedServices.value.has(serviceName)
 }
 
+const formatServiceName = (name: string) => {
+  return name
+    .replace(/[-_]/g, ' ')
+    .split(' ')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ')
+}
+
 onMounted(() => {
   fetchServices()
   // Refresh services every 5 seconds
@@ -103,7 +111,7 @@ onUnmounted(() => {
             <div class="flex items-center justify-between w-full">
               <div class="flex items-center gap-2">
                 <Server :size="16" />
-                <span>{{ service.name }}</span>
+                <span>{{ formatServiceName(service.name) }}</span>
               </div>
               <ChevronRight 
                 :size="16" 
