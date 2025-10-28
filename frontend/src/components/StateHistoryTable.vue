@@ -49,7 +49,9 @@ const fetchStateHistory = async (before?: number, after?: number, updateUrl = tr
       throw new Error(`HTTP error! status: ${response.status}`)
     }
     const data = await response.json()
-    entries.value = data
+    
+    // Reverse to show newest first
+    entries.value = data.reverse()
     
     // Update URL query parameters
     if (updateUrl) {
