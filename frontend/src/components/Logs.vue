@@ -1,15 +1,15 @@
 <script setup lang="ts">
-import ServicesOverview from './ServicesOverview.vue'
+import LogsTable from './LogsTable.vue'
 </script>
 
 <template>
-  <div class="dashboard">
-    <ServicesOverview />
+  <div class="logs-page">
+    <LogsTable />
   </div>
 </template>
 
 <style scoped>
-.dashboard {
+.logs-page {
   width: 100%;
   min-height: 100vh;
   background: #f9fafb;
