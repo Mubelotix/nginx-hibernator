@@ -16,7 +16,9 @@ pub struct HistoryEntry {
 #[derive(Serialize, Deserialize)]
 pub struct StateHistoryEntry {
     #[serde(with = "chrono::serde::ts_seconds")]
-    pub timestamp: DateTime<Utc>,
+    pub start_time: DateTime<Utc>,
+    #[serde(with = "chrono::serde::ts_seconds")]
+    pub end_time: DateTime<Utc>,
     pub service: String,
     pub state: String,
 }
@@ -132,14 +134,46 @@ pub async fn handle_state_history_request(mut stream: TcpStream, url: &Url) {
     let after = query_pairs.get("after").and_then(|a| a.parse::<i64>().ok()).map(|ts| DateTime::from_timestamp(ts, 0).unwrap());
     let min_results = query_pairs.get("minResults").and_then(|m| m.parse::<usize>().ok()).unwrap_or(10);
 
-    let history = DATABASE.get_state_history(
-        service,
-        before.or(Some(DateTime::from_timestamp(i64::MAX / 1_000_000_000, 0).unwrap())),
-        after,
-        min_results
-    ).unwrap(); // FIXME
+    let mut all_ranges = Vec::new();
 
-    let entries = history.into_iter().map(|(timestamp, service, state)| {
+    if let Some(svc) = service {
+        // Query specific service
+        let ranges = DATABASE.get_state_history(
+            svc,
+            before.or(Some(DateTime::from_timestamp(i64::MAX / 1_000_000_000, 0).unwrap())),
+            after,
+            min_results
+        ).unwrap(); // FIXME
+        
+        all_ranges = ranges;
+    } else {
+        // Query all services and collect results
+        // SAFETY: This is safe because SITE_CONTROLLERS is only mutated once during initialization
+        #[allow(static_mut_refs)]
+        let services: Vec<&str> = unsafe {
+            SITE_CONTROLLERS.iter().map(|controller| controller.config.name.as_str()).collect()
+        };
+
+        for svc in services {
+            let ranges = DATABASE.get_state_history(
+                svc,
+                before.or(Some(DateTime::from_timestamp(i64::MAX / 1_000_000_000, 0).unwrap())),
+                after,
+                min_results
+            ).unwrap_or_default(); // FIXME: Better error handling
+            
+            all_ranges.extend(ranges);
+        }
+
+        // Sort by start_time (newest first since we're querying backwards)
+        all_ranges.sort_by(|a, b| b.0.cmp(&a.0));
+        
+        // Limit to min_results
+        all_ranges.truncate(min_results);
+    }
+
+    // Convert to API format
+    let entries: Vec<StateHistoryEntry> = all_ranges.into_iter().map(|(start_time, end_time, service_name, state)| {
         let state_str = match state {
             SiteState::Unknown => "unknown",
             SiteState::Down => "down",
@@ -147,11 +181,12 @@ pub async fn handle_state_history_request(mut stream: TcpStream, url: &Url) {
             SiteState::Starting => "starting",
         };
         StateHistoryEntry {
-            timestamp,
-            service,
+            start_time,
+            end_time,
+            service: service_name,
             state: state_str.to_string(),
         }
-    }).collect::<Vec<_>>();
+    }).collect();
 
     let content = serde_json::to_string(&entries).unwrap(); // FIXME
 

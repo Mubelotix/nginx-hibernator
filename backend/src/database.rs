@@ -144,107 +144,119 @@ impl Database {
         Ok(results)
     }
 
-    pub fn get_state_history(&self, service: Option<&str>, before: Option<DateTime<Utc>>, after: Option<DateTime<Utc>>, min_results: usize) -> AnyResult<Vec<(DateTime<Utc>, String, SiteState)>> {
+    pub fn get_state_history(&self, service: &str, before: Option<DateTime<Utc>>, after: Option<DateTime<Utc>>, min_results: usize) -> AnyResult<Vec<(DateTime<Utc>, DateTime<Utc>, String, SiteState)>> {
         let rtxn = self.env.read_txn()?;
 
-        let mut results = Vec::new();
+        let mut raw_results = Vec::new();
 
         match (before, after) {
             (Some(before), None) => {
                 // Query backwards from 'before' timestamp
-                if let Some(svc) = service {
-                    let min = StateChangeKey {
-                        service: svc.to_string(),
-                        timestamp: DateTime::from_timestamp_nanos(0),
-                    };
-                    let max = StateChangeKey {
-                        service: svc.to_string(),
-                        timestamp: before,
-                    };
-                    let mut iter = self.states.rev_range(&rtxn, &(min..max))?;
+                let min = StateChangeKey {
+                    service: service.to_string(),
+                    timestamp: DateTime::from_timestamp_nanos(0),
+                };
+                let max = StateChangeKey {
+                    service: service.to_string(),
+                    timestamp: before,
+                };
+                let mut iter = self.states.rev_range(&rtxn, &(min..max))?;
+                
+                let mut deduplicated_count = 0;
+                let mut last_state: Option<SiteState> = None;
+                
+                while let Some((key, state)) = iter.next().transpose()? {
+                    raw_results.push((key.timestamp, key.service.clone(), state));
                     
-                    while let Some((key, state)) = iter.next().transpose()? {
-                        results.push((key.timestamp, key.service, state));
-                        
-                        if results.len() >= min_results {
-                            return Ok(results);
+                    // Count deduplicated entries (state changes)
+                    match &last_state {
+                        Some(last_site_state) if last_site_state == &state => {
+                            // Same state continues, don't increment count
+                        }
+                        _ => {
+                            // State changed or first entry
+                            deduplicated_count += 1;
+                            last_state = Some(state);
                         }
                     }
-                } else {
-                    // Query all services
-                    let min = StateChangeKey {
-                        service: String::new(),
-                        timestamp: DateTime::from_timestamp_nanos(0),
-                    };
-                    let max = StateChangeKey {
-                        service: "\u{10FFFF}".repeat(100), // Max unicode string FIXME
-                        timestamp: before,
-                    };
-                    let mut iter = self.states.rev_range(&rtxn, &(min..max))?;
                     
-                    while let Some((key, state)) = iter.next().transpose()? {
-                        results.push((key.timestamp, key.service, state));
-                        
-                        if results.len() >= min_results {
-                            return Ok(results);
-                        }
-                    }
-                }
-            }
-            (None, Some(after)) => {
-                // Query forwards from 'after' timestamp
-                if let Some(svc) = service {
-                    let min = StateChangeKey {
-                        service: svc.to_string(),
-                        timestamp: after,
-                    };
-                    let max = StateChangeKey {
-                        service: svc.to_string(),
-                        timestamp: DateTime::from_timestamp_nanos(i64::MAX),
-                    };
-                    let mut iter = self.states.range(&rtxn, &(min..max))?;
-                    
-                    while let Some((key, state)) = iter.next().transpose()? {
-                        if key.timestamp > after {
-                            results.push((key.timestamp, key.service, state));
-                        }
-                        
-                        if results.len() >= min_results {
-                            break;
-                        }
-                    }
-                } else {
-                    // Query all services
-                    let min = StateChangeKey {
-                        service: String::new(),
-                        timestamp: after,
-                    };
-                    let max = StateChangeKey {
-                        service: "\u{10FFFF}".repeat(100), // Max unicode string FIXME
-                        timestamp: DateTime::from_timestamp_nanos(i64::MAX),
-                    };
-                    let mut iter = self.states.range(&rtxn, &(min..max))?;
-                    
-                    while let Some((key, state)) = iter.next().transpose()? {
-                        if key.timestamp > after {
-                            results.push((key.timestamp, key.service, state));
-                        }
-                        
-                        if results.len() >= min_results {
-                            break;
-                        }
+                    if deduplicated_count >= min_results {
+                        break;
                     }
                 }
 
-                // Reverse to show newest first
-                results.reverse();
+                raw_results.reverse();
+            }
+            (None, Some(after)) => {
+                // Query forwards from 'after' timestamp
+                let min = StateChangeKey {
+                    service: service.to_string(),
+                    timestamp: after,
+                };
+                let max = StateChangeKey {
+                    service: service.to_string(),
+                    timestamp: DateTime::from_timestamp_nanos(i64::MAX),
+                };
+                let mut iter = self.states.range(&rtxn, &(min..max))?;
+                
+                let mut deduplicated_count = 0;
+                let mut last_state: Option<SiteState> = None;
+                
+                while let Some((key, state)) = iter.next().transpose()? {
+                    if key.timestamp > after {
+                        raw_results.push((key.timestamp, key.service.clone(), state));
+                        
+                        // Count deduplicated entries (state changes)
+                        match &last_state {
+                            Some(last_site_state) if last_site_state == &state => {
+                                // Same state continues, don't increment count
+                            }
+                            _ => {
+                                // State changed or first entry
+                                deduplicated_count += 1;
+                                last_state = Some(state);
+                            }
+                        }
+                        
+                        if deduplicated_count >= min_results {
+                            break;
+                        }
+                    }
+                }
             }
             _ => {
                 return Err(anyhow!("Must specify either 'before' or 'after', but not both"));
             }
         }
 
-        Ok(results)
+        // Convert raw results into ranges
+        let mut ranges = Vec::new();
+        let mut current_range: Option<(DateTime<Utc>, String, SiteState)> = None;
+
+        for (timestamp, service_name, state) in raw_results {
+            match &current_range {
+                None => {
+                    // First state
+                    current_range = Some((timestamp, service_name, state));
+                }
+                Some((start_time, current_service, current_state)) => {
+                    if current_state == &state && current_service == &service_name {
+                        // Same state continues, extend the range (do nothing, we'll use timestamp as end when it changes)
+                    } else {
+                        // State changed, emit the previous range
+                        ranges.push((*start_time, timestamp, current_service.clone(), *current_state));
+                        current_range = Some((timestamp, service_name, state));
+                    }
+                }
+            }
+        }
+
+        // Emit the last state (it's still ongoing, so end_time = now)
+        if let Some((start_time, service_name, state)) = current_range {
+            ranges.push((start_time, Utc::now(), service_name, state));
+        }
+
+        Ok(ranges)
     }
 
     pub fn get_state_history_since(&self, service: &str, since: DateTime<Utc>) -> AnyResult<Vec<(DateTime<Utc>, SiteState)>> {

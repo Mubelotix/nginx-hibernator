@@ -43,7 +43,8 @@ export interface HistoryEntry {
 }
 
 export interface StateHistoryEntry {
-  timestamp: number
+  start_time: number
+  end_time: number
   service: string
   state: ServiceState
 }

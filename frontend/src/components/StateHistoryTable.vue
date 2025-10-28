@@ -83,8 +83,8 @@ const showBackButton = computed(() => {
 const loadNext = () => {
   if (entries.value.length === 0) return
   
-  // Get the earliest (minimum) timestamp from displayed entries
-  const earliestTimestamp = Math.min(...entries.value.map(e => e.timestamp))
+  // Get the earliest (minimum) start_time from displayed entries
+  const earliestTimestamp = Math.min(...entries.value.map(e => e.start_time))
   fetchStateHistory(earliestTimestamp, undefined)
 }
 
@@ -147,6 +147,24 @@ const formatTime = (timestamp: number) => {
   const date = new Date(timestamp * 1000)
   return date.toLocaleString()
 }
+
+const formatDuration = (startTime: number, endTime: number) => {
+  const durationMs = (endTime - startTime) * 1000
+  const seconds = Math.floor(durationMs / 1000)
+  const minutes = Math.floor(seconds / 60)
+  const hours = Math.floor(minutes / 60)
+  const days = Math.floor(hours / 24)
+
+  if (days > 0) {
+    return `${days}d ${hours % 24}h`
+  } else if (hours > 0) {
+    return `${hours}h ${minutes % 60}m`
+  } else if (minutes > 0) {
+    return `${minutes}m ${seconds % 60}s`
+  } else {
+    return `${seconds}s`
+  }
+}
 </script>
 
 <template>
@@ -163,7 +181,9 @@ const formatTime = (timestamp: number) => {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead class="w-[200px]">Timestamp</TableHead>
+              <TableHead class="w-[200px]">Start Time</TableHead>
+              <TableHead class="w-[200px]">End Time</TableHead>
+              <TableHead class="w-[120px]">Duration</TableHead>
               <TableHead v-if="!props.serviceName" class="w-[150px]">Service</TableHead>
               <TableHead class="w-[150px]">State</TableHead>
             </TableRow>
@@ -174,7 +194,9 @@ const formatTime = (timestamp: number) => {
               :key="index" 
               class="state-row"
             >
-              <TableCell class="font-mono text-sm">{{ formatTime(entry.timestamp) }}</TableCell>
+              <TableCell class="font-mono text-sm">{{ formatTime(entry.start_time) }}</TableCell>
+              <TableCell class="font-mono text-sm">{{ formatTime(entry.end_time) }}</TableCell>
+              <TableCell class="font-mono text-sm">{{ formatDuration(entry.start_time, entry.end_time) }}</TableCell>
               <TableCell v-if="!props.serviceName" class="text-sm">{{ entry.service }}</TableCell>
               <TableCell class="font-medium" :class="getStateClass(entry.state)">
                 <span class="state-badge">

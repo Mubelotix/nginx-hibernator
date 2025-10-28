@@ -73,10 +73,11 @@ impl SiteController {
 
     async fn set_state(&self, state: SiteState) {
         let old_state = self.get_state();
+        DATABASE.update_state(&self.config.name, state).expect("could not update site state in database");
+
         if old_state == state {
             return;
         }
-        DATABASE.update_state(&self.config.name, state).expect("could not update site state in database");
 
         match state {
             SiteState::Down => self.on_down().await,
