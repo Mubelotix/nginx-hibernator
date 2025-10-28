@@ -1,0 +1,382 @@
+<script setup lang="ts">
+import { ref, onMounted, computed, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import type { HistoryEntry, ConnectionResult } from '@/types/api'
+
+const router = useRouter()
+const route = useRoute()
+
+const entries = ref<HistoryEntry[]>([])
+const loading = ref(true)
+const error = ref<string | null>(null)
+
+const fetchHistory = async (before?: number, after?: number, updateUrl = true) => {
+  try {
+    loading.value = true
+    error.value = null
+    
+    let url = '/hibernator-api/history'
+    const params = new URLSearchParams()
+    
+    if (before !== undefined) {
+      params.append('before', before.toString())
+    }
+    if (after !== undefined) {
+      params.append('after', after.toString())
+    }
+    
+    if (params.toString()) {
+      url += `?${params.toString()}`
+    }
+    
+    const response = await fetch(url)
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
+    const data = await response.json()
+    entries.value = data
+    
+    // Update URL query parameters
+    if (updateUrl) {
+      const routeQuery: Record<string, string> = {}
+      if (before !== undefined) {
+        routeQuery.before = before.toString()
+      }
+      if (after !== undefined) {
+        routeQuery.after = after.toString()
+      }
+      
+      router.push({ query: routeQuery })
+    }
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Failed to fetch data'
+    console.error('Failed to fetch history:', e)
+  } finally {
+    loading.value = false
+  }
+}
+
+const showNextButton = computed(() => {
+  return entries.value.length >= 10
+})
+
+const showBackButton = computed(() => {
+  // Show back button if we have pagination parameters in the URL
+  return route.query.before !== undefined || route.query.after !== undefined
+})
+
+const loadNext = () => {
+  if (entries.value.length === 0) return
+  
+  // Get the earliest (minimum) timestamp from displayed entries
+  const earliestTimestamp = Math.min(...entries.value.map(e => e.timestamp))
+  fetchHistory(earliestTimestamp, undefined)
+}
+
+const loadBack = () => {
+  // Use browser's back button to navigate to previous page
+  router.back()
+}
+
+const refresh = () => {
+  fetchHistory()
+}
+
+// Load data based on URL parameters on mount and when route changes
+onMounted(() => {
+  const before = route.query.before ? Number(route.query.before) : undefined
+  const after = route.query.after ? Number(route.query.after) : undefined
+  
+  if (before !== undefined || after !== undefined) {
+    fetchHistory(before, after, false)
+  } else {
+    fetchHistory()
+  }
+})
+
+// Watch for route changes (browser back/forward navigation)
+watch(() => route.query, (newQuery) => {
+  const before = newQuery.before ? Number(newQuery.before) : undefined
+  const after = newQuery.after ? Number(newQuery.after) : undefined
+  
+  fetchHistory(before, after, false)
+})
+
+const getStatusClass = (result: ConnectionResult) => {
+  switch (result) {
+    case 'ProxySuccess':
+    case 'ApiHandled':
+      return 'status-success'
+    case 'ProxyFailed':
+    case 'ProxyTimeout':
+    case 'InvalidUrl':
+      return 'status-error'
+    case 'MissingHost':
+    case 'UnknownSite':
+      return 'status-warning'
+    default:
+      return 'status-neutral'
+  }
+}
+
+const getStatusText = (result: ConnectionResult) => {
+  switch (result) {
+    case 'ProxySuccess':
+      return '200'
+    case 'ProxyFailed':
+      return '502'
+    case 'Unproxied':
+      return '503'
+    case 'ProxyTimeout':
+      return '504'
+    case 'MissingHost':
+    case 'UnknownSite':
+      return '404'
+    case 'InvalidUrl':
+      return '400'
+    default:
+      return '-'
+  }
+}
+
+const parseRequestLine = (request: string[]) => {
+  if (request.length === 0) return { method: '-', url: '-', protocol: '-' }
+  
+  const firstLine = request[0]
+  if (!firstLine) return { method: '-', url: '-', protocol: '-' }
+  
+  const parts = firstLine.split(' ')
+  
+  return {
+    method: parts[0] || '-',
+    url: parts[1] || '-',
+    protocol: parts[2] || '-',
+  }
+}
+
+const formatTime = (timestamp: number) => {
+  const date = new Date(timestamp * 1000)
+  return date.toLocaleTimeString()
+}
+</script>
+
+<template>
+  <div class="requests-container">
+    <div class="requests-header">
+      <h1>Request History</h1>
+      <button @click="refresh" class="refresh-button">Refresh</button>
+    </div>
+
+    <div v-if="loading" class="loading">Loading...</div>
+    <div v-else-if="error" class="error">Error: {{ error }}</div>
+    <div v-else>
+      <div class="table-wrapper">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead class="w-[100px]">Time</TableHead>
+              <TableHead class="w-[80px]">Method</TableHead>
+              <TableHead class="w-[400px]">URL</TableHead>
+              <TableHead class="w-[80px]">Status</TableHead>
+              <TableHead class="w-[100px]">Result</TableHead>
+              <TableHead class="w-[120px]">Service</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <TableRow v-for="(entry, index) in entries" :key="index" class="request-row">
+              <TableCell class="font-mono text-xs">{{ formatTime(entry.timestamp) }}</TableCell>
+              <TableCell class="font-mono method-cell">{{ parseRequestLine(entry.request).method }}</TableCell>
+              <TableCell class="font-mono text-xs url-cell" :title="parseRequestLine(entry.request).url">
+                {{ parseRequestLine(entry.request).url }}
+              </TableCell>
+              <TableCell class="font-mono" :class="getStatusClass(entry.result)">
+                {{ getStatusText(entry.result) }}
+              </TableCell>
+              <TableCell class="font-mono text-xs">{{ entry.result }}</TableCell>
+              <TableCell class="text-xs">{{ entry.service || '-' }}</TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </div>
+      
+      <div class="pagination">
+        <button 
+          v-if="showBackButton" 
+          @click="loadBack" 
+          class="nav-button back-button"
+        >
+          ← Back
+        </button>
+        <button 
+          v-if="showNextButton" 
+          @click="loadNext" 
+          class="nav-button next-button"
+        >
+          Next →
+        </button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.requests-container {
+  width: 100%;
+  max-width: 100%;
+  padding: 20px;
+  background: #ffffff;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+}
+
+.requests-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.requests-header h1 {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1f2937;
+  margin: 0;
+}
+
+.refresh-button {
+  padding: 6px 12px;
+  background: #3b82f6;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.refresh-button:hover {
+  background: #2563eb;
+}
+
+.loading,
+.error {
+  padding: 20px;
+  text-align: center;
+  color: #6b7280;
+}
+
+.error {
+  color: #dc2626;
+}
+
+.table-wrapper {
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.pagination {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  padding: 16px 0;
+  margin-top: 12px;
+}
+
+.nav-button {
+  padding: 8px 16px;
+  background: #3b82f6;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background-color 0.2s;
+}
+
+.nav-button:hover {
+  background: #2563eb;
+}
+
+.nav-button:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+}
+
+:deep(.request-row) {
+  border-bottom: 1px solid #f3f4f6;
+  transition: background-color 0.1s;
+}
+
+:deep(.request-row:hover) {
+  background-color: #f9fafb;
+}
+
+:deep(thead) {
+  background-color: #f9fafb;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+:deep(th) {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+:deep(td) {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: #1f2937;
+}
+
+.method-cell {
+  font-weight: 600;
+  color: #2563eb;
+}
+
+.url-cell {
+  max-width: 400px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #1f2937;
+}
+
+.status-success {
+  color: #059669;
+  font-weight: 600;
+}
+
+.status-error {
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.status-warning {
+  color: #d97706;
+  font-weight: 600;
+}
+
+.status-neutral {
+  color: #6b7280;
+}
+
+.font-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+}
+</style>

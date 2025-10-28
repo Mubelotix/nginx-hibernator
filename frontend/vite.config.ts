@@ -10,4 +10,12 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  server: {
+    proxy: {
+      '/hibernator': {
+        target: 'http://localhost:7878',
+        changeOrigin: true,
+      },
+    },
+  },
 })

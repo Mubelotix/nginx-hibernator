@@ -107,6 +107,31 @@ impl Database {
         Ok(results)
     }
 
+    pub fn get_history_after(&self, service: Option<&str>, after: u64, min_results: usize) -> AnyResult<Vec<(u64, ConnectionMetadata)>> {
+        let rtxn = self.env.read_txn()?;
+
+        let mut results = Vec::new();
+
+        let mut iter = self.connections.range(&rtxn, &((after + 1)..u64::MAX))?;
+        while let Some((at, metadatas)) = iter.next().transpose()? {
+            for metadata in metadatas {
+                if service.is_some() && metadata.service.as_deref() != service {
+                    continue;
+                }
+
+                results.push((at, metadata));
+            }
+
+            if results.len() >= min_results {
+                break;
+            }
+        }
+
+        // Reverse to show newest first
+        results.reverse();
+        Ok(results)
+    }
+
     pub fn get_start_duration_estimate(&self, name: &str, percentile: usize) -> AnyResult<Duration> {
         let rtxn = self.env.read_txn()?;
 
