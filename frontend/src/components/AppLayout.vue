@@ -17,7 +17,7 @@ import {
   SidebarProvider,
   SidebarInset,
 } from '@/components/ui/sidebar'
-import { LayoutDashboard, FileText, Server, ChevronRight } from 'lucide-vue-next'
+import { LayoutDashboard, Activity, Server, ChevronRight, Cctv } from 'lucide-vue-next'
 import { formatServiceName } from '@/lib/utils'
 
 const route = useRoute()
@@ -30,12 +30,12 @@ const menuItems = [
   },
   {
     title: 'All Network Logs',
-    icon: FileText,
+    icon: Cctv,
     path: '/network',
   },
   {
     title: 'All State Logs',
-    icon: FileText,
+    icon: Activity,
     path: '/states',
   },
 ]
