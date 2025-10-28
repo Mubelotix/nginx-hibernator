@@ -38,7 +38,7 @@ impl ConnectionMetadata {
         // Extract and remove the request line (method, URL, protocol)
         let (method, url) = if let Some(first_line) = request.first() {
             let parts: Vec<&str> = first_line.split_whitespace().collect();
-            let method = parts.get(0).unwrap_or(&"-").to_string();
+            let method = parts.first().unwrap_or(&"-").to_string();
             let url = parts.get(1).unwrap_or(&"-").to_string();
             (method, url)
         } else {
