@@ -306,8 +306,8 @@ const closeSidePanel = () => {
 .logs-container {
   width: 100%;
   max-width: 100%;
+  min-height: 100%;
   padding: 20px;
-  background: #ffffff;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
 }
 

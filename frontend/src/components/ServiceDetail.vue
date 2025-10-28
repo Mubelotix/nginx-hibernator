@@ -299,7 +299,7 @@ onMounted(() => {
 }
 
 .service-meta {
-  background: #f9fafb;
+  background: #fff;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
   padding: 16px;
