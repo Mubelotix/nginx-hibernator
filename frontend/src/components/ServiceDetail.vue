@@ -2,12 +2,17 @@
 import { ref, onMounted, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import type { ServiceInfo } from '@/types/api'
-import { SidebarTrigger } from '@/components/ui/sidebar'
-import { Separator } from '@/components/ui/separator'
+import PageHeader from './PageHeader.vue'
 import { formatTime } from '@/lib/time'
+import { formatServiceName } from '@/lib/utils'
 
 const route = useRoute()
 const serviceName = computed(() => route.params.name as string)
+
+const breadcrumbs = computed(() => [
+  { label: formatServiceName(serviceName.value), to: `/services/${serviceName.value}` },
+  { label: 'Config' }
+])
 
 const serviceInfo = ref<ServiceInfo | null>(null)
 const serviceConfig = ref<Record<string, any> | null>(null)
@@ -108,17 +113,7 @@ onMounted(() => {
 
 <template>
   <div class="service-detail">
-    <header class="header">
-      <div class="header-content">
-        <SidebarTrigger class="-ml-1" />
-        <Separator orientation="vertical" class="mr-2 h-4" />
-        <div class="breadcrumb">
-          <router-link to="/" class="breadcrumb-link">Services</router-link>
-          <span class="breadcrumb-separator">/</span>
-          <span class="breadcrumb-current">{{ serviceName }}</span>
-        </div>
-      </div>
-    </header>
+    <PageHeader :breadcrumbs="breadcrumbs" />
 
     <div class="content">
       <div v-if="loading" class="loading">Loading service details...</div>
@@ -162,53 +157,6 @@ onMounted(() => {
   flex-direction: column;
   min-height: 100vh;
   background: #f9fafb;
-}
-
-.header {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  border-bottom: 1px solid #e5e7eb;
-  background: #ffffff;
-  padding: 0 16px;
-  height: 57px;
-  flex-shrink: 0;
-}
-
-.header-content {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.breadcrumb {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
-}
-
-.breadcrumb-link {
-  color: #6b7280;
-  text-decoration: none;
-  transition: color 0.2s;
-}
-
-.breadcrumb-link:hover {
-  color: #1f2937;
-}
-
-.breadcrumb-separator {
-  color: #d1d5db;
-  user-select: none;
-}
-
-.breadcrumb-current {
-  color: #1f2937;
-  font-weight: 600;
 }
 
 .content {

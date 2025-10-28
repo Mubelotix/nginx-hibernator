@@ -18,6 +18,7 @@ import {
   SidebarInset,
 } from '@/components/ui/sidebar'
 import { LayoutDashboard, FileText, Server, ChevronRight } from 'lucide-vue-next'
+import { formatServiceName } from '@/lib/utils'
 
 const route = useRoute()
 
@@ -61,14 +62,6 @@ const toggleService = (serviceName: string) => {
 
 const isServiceExpanded = (serviceName: string) => {
   return expandedServices.value.has(serviceName)
-}
-
-const formatServiceName = (name: string) => {
-  return name
-    .replace(/[-_]/g, ' ')
-    .split(' ')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-    .join(' ')
 }
 
 onMounted(() => {
