@@ -1,26 +1,30 @@
 use std::time::Duration;
-use crate::{database::DATABASE, get_controller, util::now, Config, ProxyMode, SiteConfig};
+use crate::{Config, ProxyMode, SiteConfig, api::handle_history_request, controller::SiteController, database::DATABASE, get_controller, util::now};
 use log::*;
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use tokio::{io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader}, net::{TcpListener, TcpStream}, spawn, time::{sleep, timeout}};
 use tokio_stream::{wrappers::LinesStream, StreamExt};
+use url::Url;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub enum ConnectionResult {
     MissingHost,
     UnknownSite,
+    InvalidUrl,
     Ignored,
     Unproxied,
     ProxySuccess,
     ProxyFailed,
     ProxyTimeout,
+    ApiHandled,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ConnectionMetadata {
     pub request: Vec<String>,
-    pub result: ConnectionResult
+    pub result: ConnectionResult,
+    pub service: Option<String>,
 }
 
 impl ConnectionMetadata {
@@ -40,7 +44,20 @@ impl ConnectionMetadata {
         // Only keep 30 lines
         request.truncate(30);
 
-        ConnectionMetadata { request, result }
+        ConnectionMetadata { request, result, service: None }
+    }
+
+    fn with_controller(mut self, controller: &SiteController) -> Self {
+        self.service = Some(controller.config.name.clone());
+        self
+    }
+
+    fn api_handled() -> Self {
+        ConnectionMetadata {
+            request: Vec::new(),
+            result: ConnectionResult::ApiHandled,
+            service: None,
+        }
     }
 }
 
@@ -53,6 +70,11 @@ pub async fn setup_server(config: &'static Config) {
                 spawn(async move {
                     let at = now();
                     let result = handle_connection(stream).await;
+
+                    if result.result == ConnectionResult::ApiHandled {
+                        return;
+                    }
+
                     if let Err(e) = DATABASE.put_connection_metadata(at, result) {
                         eprintln!("Couldn't put connection metadata {e}")
                     }
@@ -122,6 +144,39 @@ async fn handle_connection(mut stream: TcpStream) -> ConnectionMetadata {
         .await;
     debug!("Request: {http_request:?}");
 
+    let first_line = http_request.first().expect("Request is empty");
+    let path = first_line.split_whitespace().nth(1).expect("Request line is empty");
+    if path.starts_with("/hibernator-api/") {
+        // Handle hibernator API requests
+        let url: Url = match Url::parse(&format!("http://_{path}")) {
+            Ok(url) => url,
+            Err(e) => {
+                debug!("Could not parse API request URL: {e}");
+                let status_line = "HTTP/1.1 400 Bad Request";
+                let content = "Could not parse API request URL";
+                let length = content.len();
+                let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
+                let _ = stream.write_all(response.as_bytes()).await;
+                return ConnectionMetadata::new(http_request, InvalidUrl);
+            }
+        };
+
+        let segments: Vec<_> = url.path_segments().map(|c| c.collect()).unwrap_or_default();
+
+        // GET /hibernator-api/history
+        if segments.len() == 2 && segments[0] == "hibernator-api" && segments[1] == "history" {
+            handle_history_request(stream, &url).await;
+            return ConnectionMetadata::api_handled();
+        }
+
+        let status_line = "HTTP/1.1 404 Not Found";
+        let content = "API endpoint not found";
+        let length = content.len();
+        let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
+        let _ = stream.write_all(response.as_bytes()).await;
+        return ConnectionMetadata::api_handled();
+    }
+
     let host = http_request
         .iter()
         .find(|line| line.to_lowercase().starts_with("host: "))
@@ -173,7 +228,7 @@ async fn handle_connection(mut stream: TcpStream) -> ConnectionMetadata {
         let length = content.len();
         let response = format!("{status_line}\r\nContent-Length: {length}\r\n{retry_after}\r\n{content}");
         let _ = stream.write_all(response.as_bytes()).await;
-        return ConnectionMetadata::new(http_request, Ignored);
+        return ConnectionMetadata::new(http_request, Ignored).with_controller(controller);
     }
 
     // Determine if we should attempt to proxy the request
@@ -208,15 +263,15 @@ async fn handle_connection(mut stream: TcpStream) -> ConnectionMetadata {
 
         controller.trigger_start();
 
-        return ConnectionMetadata::new(http_request, Unproxied);
+        return ConnectionMetadata::new(http_request, Unproxied).with_controller(controller);
     }
 
-    let content_lenght = http_request
+    let content_length = http_request
         .iter()
         .find(|line| line.to_lowercase().starts_with("content-length: "))
         .map(|line| line[16..].parse::<usize>().expect("Could not parse content length"))
         .unwrap_or(0);
-    let mut body = vec![0; content_lenght];
+    let mut body = vec![0; content_length];
     stream.read_exact(&mut body).await.expect("Could not read request body");
 
     let timeout_duration = Duration::from_millis(controller.config.proxy_timeout_ms.0);
@@ -237,7 +292,7 @@ async fn handle_connection(mut stream: TcpStream) -> ConnectionMetadata {
         Ok(Ok(response)) => {
             debug!("Returning response from upstream");
             let _ = stream.write_all(&response).await;
-            ConnectionMetadata::new(http_request, ProxySuccess)
+            ConnectionMetadata::new(http_request, ProxySuccess).with_controller(controller)
         },
         Ok(Err(e)) => {
             let status_line = "HTTP/1.1 500 Internal Server Error";
@@ -245,7 +300,7 @@ async fn handle_connection(mut stream: TcpStream) -> ConnectionMetadata {
             let length = content.len();
             let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
             let _ = stream.write_all(response.as_bytes()).await;
-            ConnectionMetadata::new(http_request, ProxyFailed)
+            ConnectionMetadata::new(http_request, ProxyFailed).with_controller(controller)
         },
         Err(_) => {
             debug!("Site {} took too long to start", controller.config.name);
@@ -255,7 +310,7 @@ async fn handle_connection(mut stream: TcpStream) -> ConnectionMetadata {
             let length = content.len();
             let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
             let _ = stream.write_all(response.as_bytes()).await;
-            ConnectionMetadata::new(http_request, ProxyTimeout)
+            ConnectionMetadata::new(http_request, ProxyTimeout).with_controller(controller)
         },
     }
 }

@@ -1,8 +1,6 @@
 use anyhow::{Result as AnyResult, anyhow};
 use heed::{
-    byteorder::BigEndian,
-    types::{SerdeBincode as Bincoded, Str, U64},
-    Database as HeedDatabase, EnvOpenOptions,
+    Database as HeedDatabase, EnvOpenOptions, byteorder::BigEndian, types::{SerdeBincode as Bincoded, SerdeJson as Jsoned, Str, U64}
 };
 use std::{sync::LazyLock, time::Duration};
 use crate::{config::Config, server::ConnectionMetadata};
@@ -13,7 +11,7 @@ const LATEST_DB_VERSION: u64 = 0;
 
 pub struct Database {
     env: heed::Env,
-    connections: HeedDatabase<U64<BigEndian>, Bincoded<Vec<ConnectionMetadata>>>,
+    connections: HeedDatabase<U64<BigEndian>, Jsoned<Vec<ConnectionMetadata>>>,
     start_durations: HeedDatabase<Str, Bincoded<Vec<Duration>>>,
 }
 
@@ -66,7 +64,7 @@ impl Database {
             .expect("couldn't create tokens database");
 
         let start_durations = env
-            .create_database(&mut wtxn, Some("connections"))
+            .create_database(&mut wtxn, Some("start_durations"))
             .expect("couldn't create tokens database");
 
         wtxn.commit().expect("couldn't commit transaction");
@@ -84,6 +82,29 @@ impl Database {
         wtxn.commit()?;
         
         Ok(())
+    }
+
+    pub fn get_history(&self, service: Option<&str>, before: u64, min_results: usize) -> AnyResult<Vec<(u64, ConnectionMetadata)>> {
+        let rtxn = self.env.read_txn()?;
+
+        let mut results = Vec::new();
+
+        let mut iter = self.connections.rev_range(&rtxn, &(0..before))?;
+        while let Some((at, metadatas)) = iter.next().transpose()? {
+            for metadata in metadatas {
+                if service.is_some() && metadata.service.as_deref() != service {
+                    continue;
+                }
+
+                results.push((at, metadata));
+            }
+
+            if results.len() >= min_results {
+                return Ok(results);
+            }
+        }
+
+        Ok(results)
     }
 
     pub fn get_start_duration_estimate(&self, name: &str, percentile: usize) -> AnyResult<Duration> {

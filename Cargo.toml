@@ -16,3 +16,5 @@ tokio = { version="1.41", default-features=false, features = ["macros", "rt", "t
 tokio-stream ={ version="0.1", default-features=false, features = ["io-util"] }
 libc = "0.2.171"
 heed = "0.22"
+url = "2.5.7"
+serde_json = "1.0.145"

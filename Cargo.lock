@@ -601,9 +601,11 @@ dependencies = [
  "libc",
  "log",
  "serde",
+ "serde_json",
  "tokio",
  "tokio-stream",
  "toml",
+ "url",
 ]
 
 [[package]]
