@@ -1,7 +1,19 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
 import LogsTable from './LogsTable.vue'
 import { SidebarTrigger } from '@/components/ui/sidebar'
 import { Separator } from '@/components/ui/separator'
+
+const route = useRoute()
+
+const serviceName = computed(() => {
+  return route.params.serviceName as string | undefined
+})
+
+const pageTitle = computed(() => {
+  return serviceName.value ? `Logs - ${serviceName.value}` : 'Logs'
+})
 </script>
 
 <template>
@@ -10,11 +22,11 @@ import { Separator } from '@/components/ui/separator'
       <div class="header-content">
         <SidebarTrigger class="-ml-1" />
         <Separator orientation="vertical" class="mr-2 h-4" />
-        <h1 class="header-title">Logs</h1>
+        <h1 class="header-title">{{ pageTitle }}</h1>
       </div>
     </header>
     <div class="content">
-      <LogsTable />
+      <LogsTable :service-name="serviceName" />
     </div>
   </div>
 </template>

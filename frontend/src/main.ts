@@ -23,6 +23,10 @@ const router = createRouter({
           component: Logs,
         },
         {
+          path: 'logs/:serviceName',
+          component: Logs,
+        },
+        {
           path: 'services/:name',
           component: ServiceDetail,
         },

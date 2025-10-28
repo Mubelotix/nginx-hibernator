@@ -11,6 +11,10 @@ import {
 } from '@/components/ui/table'
 import type { HistoryEntry, ConnectionResult } from '@/types/api'
 
+const props = defineProps<{
+  serviceName?: string
+}>()
+
 const router = useRouter()
 const route = useRoute()
 
@@ -32,6 +36,9 @@ const fetchHistory = async (before?: number, after?: number, updateUrl = true) =
     }
     if (after !== undefined) {
       params.append('after', after.toString())
+    }
+    if (props.serviceName) {
+      params.append('service', props.serviceName)
     }
     
     if (params.toString()) {
@@ -183,7 +190,7 @@ const closeSidePanel = () => {
               <TableHead class="w-[120px]">IP</TableHead>
               <TableHead class="w-[80px]">Status</TableHead>
               <TableHead class="w-[100px]">Result</TableHead>
-              <TableHead class="w-[120px]">Service</TableHead>
+              <TableHead v-if="!props.serviceName" class="w-[120px]">Service</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -209,7 +216,7 @@ const closeSidePanel = () => {
                 {{ getStatusText(entry.result) }}
               </TableCell>
               <TableCell class="font-mono text-xs">{{ entry.result }}</TableCell>
-              <TableCell class="text-xs">{{ entry.service || '-' }}</TableCell>
+              <TableCell v-if="!props.serviceName" class="text-xs">{{ entry.service || '-' }}</TableCell>
             </TableRow>
           </TableBody>
         </Table>
