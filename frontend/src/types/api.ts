@@ -41,3 +41,9 @@ export interface HistoryEntry {
   method: string
   url: string
 }
+
+export interface StateHistoryEntry {
+  timestamp: number
+  service: string
+  state: ServiceState
+}

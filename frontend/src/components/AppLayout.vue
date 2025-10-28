@@ -29,9 +29,9 @@ const menuItems = [
     path: '/',
   },
   {
-    title: 'All Logs',
+    title: 'All Network Logs',
     icon: FileText,
-    path: '/logs',
+    path: '/network',
   },
 ]
 
@@ -128,10 +128,20 @@ onUnmounted(() => {
               <SidebarMenuSubItem>
                 <SidebarMenuSubButton
                   as-child
-                  :is-active="route.path === `/services/${service.name}/logs`"
+                  :is-active="route.path === `/services/${service.name}/network`"
                 >
-                  <router-link :to="`/services/${service.name}/logs`">
-                    <span>Logs</span>
+                  <router-link :to="`/services/${service.name}/network`">
+                    <span>Network</span>
+                  </router-link>
+                </SidebarMenuSubButton>
+              </SidebarMenuSubItem>
+              <SidebarMenuSubItem>
+                <SidebarMenuSubButton
+                  as-child
+                  :is-active="route.path === `/services/${service.name}/states`"
+                >
+                  <router-link :to="`/services/${service.name}/states`">
+                    <span>States</span>
                   </router-link>
                 </SidebarMenuSubButton>
               </SidebarMenuSubItem>

@@ -1,7 +1,7 @@
 use anyhow::{Result as AnyResult, anyhow};
 use chrono::{DateTime, Utc};
 use heed::{
-    BytesEncode, Database as HeedDatabase, EnvOpenOptions, byteorder::BigEndian, types::{Str, U64}
+    Database as HeedDatabase, EnvOpenOptions, byteorder::BigEndian, types::{Str, U64}
 };
 use serde::{Deserialize, Serialize};
 use std::{sync::LazyLock, time::Duration};
@@ -93,7 +93,7 @@ impl Database {
         Ok(())
     }
 
-    pub fn get_history(&self, service: Option<&str>, before: Option<u64>, after: Option<u64>, min_results: usize) -> AnyResult<Vec<(u64, ConnectionMetadata)>> {
+    pub fn get_connection_history(&self, service: Option<&str>, before: Option<u64>, after: Option<u64>, min_results: usize) -> AnyResult<Vec<(u64, ConnectionMetadata)>> {
         let rtxn = self.env.read_txn()?;
 
         let mut results = Vec::new();
@@ -130,6 +130,109 @@ impl Database {
 
                     if results.len() >= min_results {
                         break;
+                    }
+                }
+
+                // Reverse to show newest first
+                results.reverse();
+            }
+            _ => {
+                return Err(anyhow!("Must specify either 'before' or 'after', but not both"));
+            }
+        }
+
+        Ok(results)
+    }
+
+    pub fn get_state_history(&self, service: Option<&str>, before: Option<DateTime<Utc>>, after: Option<DateTime<Utc>>, min_results: usize) -> AnyResult<Vec<(DateTime<Utc>, String, SiteState)>> {
+        let rtxn = self.env.read_txn()?;
+
+        let mut results = Vec::new();
+
+        match (before, after) {
+            (Some(before), None) => {
+                // Query backwards from 'before' timestamp
+                if let Some(svc) = service {
+                    let min = StateChangeKey {
+                        service: svc.to_string(),
+                        timestamp: DateTime::from_timestamp_nanos(0),
+                    };
+                    let max = StateChangeKey {
+                        service: svc.to_string(),
+                        timestamp: before,
+                    };
+                    let mut iter = self.states.rev_range(&rtxn, &(min..max))?;
+                    
+                    while let Some((key, state)) = iter.next().transpose()? {
+                        results.push((key.timestamp, key.service, state));
+                        
+                        if results.len() >= min_results {
+                            return Ok(results);
+                        }
+                    }
+                } else {
+                    // Query all services
+                    let min = StateChangeKey {
+                        service: String::new(),
+                        timestamp: DateTime::from_timestamp_nanos(0),
+                    };
+                    let max = StateChangeKey {
+                        service: "\u{10FFFF}".repeat(100), // Max unicode string
+                        timestamp: before,
+                    };
+                    let mut iter = self.states.rev_range(&rtxn, &(min..max))?;
+                    
+                    while let Some((key, state)) = iter.next().transpose()? {
+                        results.push((key.timestamp, key.service, state));
+                        
+                        if results.len() >= min_results {
+                            return Ok(results);
+                        }
+                    }
+                }
+            }
+            (None, Some(after)) => {
+                // Query forwards from 'after' timestamp
+                if let Some(svc) = service {
+                    let min = StateChangeKey {
+                        service: svc.to_string(),
+                        timestamp: after,
+                    };
+                    let max = StateChangeKey {
+                        service: svc.to_string(),
+                        timestamp: DateTime::from_timestamp_nanos(i64::MAX),
+                    };
+                    let mut iter = self.states.range(&rtxn, &(min..max))?;
+                    
+                    while let Some((key, state)) = iter.next().transpose()? {
+                        if key.timestamp > after {
+                            results.push((key.timestamp, key.service, state));
+                        }
+                        
+                        if results.len() >= min_results {
+                            break;
+                        }
+                    }
+                } else {
+                    // Query all services
+                    let min = StateChangeKey {
+                        service: String::new(),
+                        timestamp: after,
+                    };
+                    let max = StateChangeKey {
+                        service: "\u{10FFFF}".repeat(100), // Max unicode string
+                        timestamp: DateTime::from_timestamp_nanos(i64::MAX),
+                    };
+                    let mut iter = self.states.range(&rtxn, &(min..max))?;
+                    
+                    while let Some((key, state)) = iter.next().transpose()? {
+                        if key.timestamp > after {
+                            results.push((key.timestamp, key.service, state));
+                        }
+                        
+                        if results.len() >= min_results {
+                            break;
+                        }
                     }
                 }
 

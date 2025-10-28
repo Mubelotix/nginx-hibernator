@@ -4,8 +4,9 @@ import './style.css'
 import App from './App.vue'
 import AppLayout from './components/AppLayout.vue'
 import Dashboard from './components/Dashboard.vue'
-import Logs from './components/Logs.vue'
+import Network from './components/Network.vue'
 import ServiceDetail from './components/ServiceDetail.vue'
+import ServiceStates from './components/ServiceStates.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -19,16 +20,20 @@ const router = createRouter({
           component: Dashboard,
         },
         {
-          path: 'logs',
-          component: Logs,
+          path: 'network',
+          component: Network,
         },
         {
           path: 'services/:name/config',
           component: ServiceDetail,
         },
         {
-          path: 'services/:name/logs',
-          component: Logs,
+          path: 'services/:name/network',
+          component: Network,
+        },
+        {
+          path: 'services/:name/states',
+          component: ServiceStates,
         },
       ],
     },

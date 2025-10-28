@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import LogsTable from './LogsTable.vue'
+import StateHistoryTable from './StateHistoryTable.vue'
 import PageHeader from './PageHeader.vue'
 import { formatServiceName } from '@/lib/utils'
 
@@ -15,25 +15,25 @@ const breadcrumbs = computed(() => {
   if (serviceName.value) {
     return [
       { label: formatServiceName(serviceName.value), to: `/services/${serviceName.value}/config` },
-      { label: 'Logs' }
+      { label: 'States' }
     ]
   } else {
-    return [{ label: 'Logs' }]
+    return [{ label: 'States' }]
   }
 })
 </script>
 
 <template>
-  <div class="logs-page">
+  <div class="states-page">
     <PageHeader :breadcrumbs="breadcrumbs" />
     <div class="content">
-      <LogsTable :service-name="serviceName" />
+      <StateHistoryTable :service-name="serviceName" />
     </div>
   </div>
 </template>
 
 <style scoped>
-.logs-page {
+.states-page {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
