@@ -24,6 +24,10 @@ const router = createRouter({
           component: Network,
         },
         {
+          path: 'states',
+          component: ServiceStates,
+        },
+        {
           path: 'services/:name/config',
           component: ServiceDetail,
         },

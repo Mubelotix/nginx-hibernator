@@ -18,7 +18,7 @@ const breadcrumbs = computed(() => {
       { label: 'States' }
     ]
   } else {
-    return [{ label: 'States' }]
+    return [{ label: 'State Logs' }]
   }
 })
 </script>

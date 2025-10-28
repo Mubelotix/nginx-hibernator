@@ -33,6 +33,11 @@ const menuItems = [
     icon: FileText,
     path: '/network',
   },
+  {
+    title: 'All State Logs',
+    icon: FileText,
+    path: '/states',
+  },
 ]
 
 const services = ref<ServiceInfo[]>([])
