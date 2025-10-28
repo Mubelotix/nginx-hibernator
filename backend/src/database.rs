@@ -345,6 +345,42 @@ impl Database {
         Ok(())
     }
 
+    /// Try to update state only if it's not already in the specified state or states.
+    /// Returns true if the state was updated, false if it was already in one of the excluded states.
+    pub fn try_update_state(&self, name: &str, new_state: SiteState, exclude_states: &[SiteState]) -> AnyResult<bool> {
+        let mut wtxn = self.env.write_txn()?;
+
+        // Check current state within the transaction
+        let min = StateChangeKey {
+            service: name.to_string(),
+            timestamp: DateTime::from_timestamp_nanos(0),
+        };
+        let max = StateChangeKey {
+            service: name.to_string(),
+            timestamp: DateTime::from_timestamp_nanos(i64::MAX),
+        };
+        let mut iter = self.states.rev_range(&wtxn, &(min..=max))?;
+
+        if let Some((_, current_state)) = iter.next().transpose()? {
+            // Check if current state is in the exclude list
+            if exclude_states.contains(&current_state) {
+                return Ok(false);
+            }
+        }
+
+        // State is not excluded, proceed with update
+        drop(iter);
+        let key = StateChangeKey {
+            service: name.to_string(),
+            timestamp: Utc::now(),
+        };
+
+        self.states.put(&mut wtxn, &key, &new_state)?;
+        wtxn.commit()?;
+
+        Ok(true)
+    }
+
     pub fn get_last_state(&self, name: &str) -> AnyResult<(SiteState, DateTime<Utc>)> {
         let rtxn = self.env.read_txn()?;
 

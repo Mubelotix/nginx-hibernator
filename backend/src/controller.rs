@@ -277,18 +277,23 @@ impl SiteController {
     }
 
     async fn start(&self, started_sender: &BroadSender<()>) {    
-        // Start the server
-        // if !try_mark_started(self.config).await {
-        //     trace!("Site {} cannot be started yet (under cooldown)", self.config.name);
-        //     return;
-        // }
+        // Try to atomically update state to Starting, but only if not already Up or Starting
+        let can_start = DATABASE
+            .try_update_state(&self.config.name, SiteState::Starting, &[SiteState::Up, SiteState::Starting])
+            .expect("could not check/update site state in database");
+
+        if !can_start {
+            trace!("Site {} is already up or starting", self.config.name);
+            return;
+        }
+
         info!("Starting service {}", self.config.name);
         let r = run_command(&format!("systemctl start {}", self.config.service_name)).await;
         if let Err(e) = r {
             error!("Error while starting site {}: {e}", self.config.name);
+            self.set_state(SiteState::Unknown).await;
             return;
         }
-        self.set_state(SiteState::Starting).await;
 
         // Wait until the site is healthy
         let start = Instant::now();
