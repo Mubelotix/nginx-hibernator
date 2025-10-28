@@ -1,14 +1,14 @@
-use std::{cmp::max, sync::atomic::{AtomicU64, AtomicUsize, Ordering}, time::Duration};
+use std::time::Duration;
+
 use chrono::{DateTime, Utc};
 use anyhow::anyhow;
 use log::*;
+use serde::{Serialize, Deserialize};
 use tokio::{fs::read_to_string, sync::{broadcast::{Receiver as BroadReceiver, Sender as BroadSender}, mpsc::{Receiver, Sender}}, time::{sleep, Instant}};
-use crate::{checking_symlink, database::DATABASE, get_last_started, get_last_stopped, is_healthy, mark_stopped, run_command, try_mark_started, SiteConfig};
+use crate::{checking_symlink, database::DATABASE, is_healthy, run_command, SiteConfig};
 
 pub struct SiteController {
     pub config: &'static SiteConfig,
-    state: &'static AtomicUsize,
-    state_last_changed: &'static AtomicU64,
     start_sender: Sender<()>,
     started_receiver: BroadReceiver<()>
 }
@@ -18,10 +18,10 @@ impl SiteController {
         let (start_sender, start_receiver) = tokio::sync::mpsc::channel(1);
         let (started_sender, started_receiver) = tokio::sync::broadcast::channel(1);
 
+        DATABASE.update_state(&config.name, SiteState::Unknown).expect("could not set initial site state in database");
+
         (Self {
             config,
-            state: Box::leak(Box::new(AtomicUsize::new(0))),
-            state_last_changed: Box::leak(Box::new(AtomicU64::new(0))),
             start_sender,
             started_receiver
         }, start_receiver, started_sender)
@@ -76,8 +76,7 @@ impl SiteController {
         if old_state == state {
             return;
         }
-        self.state.store(state as usize, Ordering::Relaxed);
-        self.state_last_changed.store(Utc::now().timestamp_millis() as u64, Ordering::Relaxed);
+        DATABASE.update_state(&self.config.name, state).expect("could not update site state in database");
 
         match state {
             SiteState::Down => self.on_down().await,
@@ -87,25 +86,12 @@ impl SiteController {
     }
 
     pub fn get_state(&self) -> SiteState {
-        let state = self.state.load(Ordering::Relaxed);
-        match state {
-            0 => SiteState::Unknown,
-            1 => SiteState::Down,
-            2 => SiteState::Up,
-            3 => SiteState::Starting,
-            _ => unreachable!()
-        }
+        DATABASE.get_last_state(&self.config.name).map(|(state, _)| state).unwrap_or(SiteState::Unknown)
     }
 
-    pub fn get_state_with_last_changed_ms(&self) -> (SiteState, u64) {
-        let state = self.get_state();
-        let last_changed = self.state_last_changed.load(Ordering::Relaxed);
+    pub fn get_state_with_last_changed(&self) -> (SiteState, DateTime<Utc>) {
+        let (state, last_changed) = DATABASE.get_last_state(&self.config.name).unwrap_or((SiteState::Unknown, Utc::now()));
         (state, last_changed)
-    }
-
-    pub fn get_state_with_last_changed(&self) -> (SiteState, u64) {
-        let (state, last_changed_ms) = self.get_state_with_last_changed_ms();
-        (state, last_changed_ms / 1000)
     }
 
     #[allow(clippy::question_mark)]
@@ -115,15 +101,13 @@ impl SiteController {
             return None;
         }
 
-        let now_ms = Utc::now().timestamp_millis() as u64;
-        let (state, mut last_changed_ms) = self.get_state_with_last_changed_ms();
+        let now = Utc::now();
+        let (state, mut last_changed) = self.get_state_with_last_changed();
         if state != SiteState::Starting {
             trace!("Site was not starting");
-            last_changed_ms = now_ms;
+            last_changed = Utc::now();
         }
-
-        let done = now_ms - last_changed_ms;
-        let done = Duration::from_millis(done);
+        let done = (now - last_changed).to_std().unwrap_or_default();
 
         let duration_estimate = match DATABASE.get_start_duration_estimate(&self.config.name, self.config.eta_percentile.0) {
             Ok(duration_estimate) => duration_estimate,
@@ -138,7 +122,7 @@ impl SiteController {
 
     async fn should_shutdown(&self) -> anyhow::Result<ShouldShutdown> {
         debug!("Checking if site {} should be shut down", self.config.name);
-        let now = Utc::now().timestamp() as u64;
+        let now = Utc::now();
 
         // Read the file and get the last line
         let content = read_to_string(&self.config.access_log).await.map_err(|e| anyhow!("could not read access log: {e}"))?;
@@ -154,13 +138,13 @@ impl SiteController {
     
                     // That shouldn't happen often given this method only gets called when the site is up
                     if !state.is_up() {
-                        return Ok(ShouldShutdown::NotUntil(now + self.config.keep_alive)); // Not sure keep_alive is the right value to use
+                        return Ok(ShouldShutdown::NotUntil(now + Duration::from_secs(self.config.keep_alive))); // Not sure keep_alive is the right value to use
                     }
                     
-                    if now - last_changed >= self.config.keep_alive {
+                    if (now - last_changed).num_seconds() >= self.config.keep_alive as i64 {
                         return Ok(ShouldShutdown::Now);
                     } else {
-                        return Ok(ShouldShutdown::NotUntil(last_changed + self.config.keep_alive));
+                        return Ok(ShouldShutdown::NotUntil(last_changed + Duration::from_secs(self.config.keep_alive)));
                     }
                 }
             };
@@ -221,35 +205,36 @@ impl SiteController {
     
             let Ok(date) = DateTime::parse_from_str(date_str, "%d/%b/%Y:%H:%M:%S %z") else {continue}; // TODO: the format should be configurable
     
-            break date;
+            break date.with_timezone(&Utc)
         };
     
+        // TODO: Add cooldown checks again
         // Calculate the last action timestamp
-        let mut last_action = last_request.timestamp() as u64;
-        trace!("Last request was at {}", last_action);
-        if let Some(last_started) = get_last_started(&self.config.name).await {
-            trace!("Last started was at {}", last_started);
-            last_action = max(last_action, last_started);
-        }
-        if let Some(last_stopped) = get_last_stopped(&self.config.name).await {
-            trace!("Last stopped was at {}", last_stopped);
-            last_action = max(last_action, last_stopped);
-        }
+        // let mut last_action = last_request.timestamp() as u64;
+        // trace!("Last request was at {}", last_action);
+        // if let Some(last_started) = get_last_started(&self.config.name).await {
+        //     trace!("Last started was at {}", last_started);
+        //     last_action = max(last_action, last_started);
+        // }
+        // if let Some(last_stopped) = get_last_stopped(&self.config.name).await {
+        //     trace!("Last stopped was at {}", last_stopped);
+        //     last_action = max(last_action, last_stopped);
+        // }
         
         // Check if the site should be shut down
-        let time_since = now.saturating_sub(last_action);
-        if time_since > self.config.keep_alive {
+        let time_since = now.signed_duration_since(last_request);
+        if time_since.num_seconds() > self.config.keep_alive as i64 {
             debug!("Site {} should be shut down now", self.config.name);
             Ok(ShouldShutdown::Now)
         } else {
-            let next_check = last_action + self.config.keep_alive + 1;
+            let next_check = last_request + Duration::from_secs(self.config.keep_alive + 1);
             debug!("Site {} should not be shut down until {next_check}", self.config.name);
             Ok(ShouldShutdown::NotUntil(next_check))
         }
     }    
 
-    async fn check(&self) -> u64 {
-        let now = Utc::now().timestamp() as u64;
+    async fn check(&self) -> DateTime<Utc> {
+        let now = Utc::now();
 
         let up = is_healthy(self.config.port).await;
         match up {
@@ -259,12 +244,12 @@ impl SiteController {
                     Err(err) => {
                         error!("Error while checking site {}: {err}", self.config.name);
                         self.set_state(SiteState::Up).await;
-                        return now + self.config.keep_alive;
+                        return now + Duration::from_secs(self.config.keep_alive);
                     },
                 };
                 match should_shutdown {
                     ShouldShutdown::Now => {
-                        mark_stopped(&self.config.name).await;
+                        // mark_stopped(&self.config.name).await;
 
                         info!("Shutting down site {}", self.config.name);
 
@@ -275,7 +260,7 @@ impl SiteController {
                             self.set_state(SiteState::Unknown).await;
                         }
                         
-                        now + self.config.keep_alive
+                        now + Duration::from_secs(self.config.keep_alive)
                     },
                     ShouldShutdown::NotUntil(next_check) => {
                         self.set_state(SiteState::Up).await;
@@ -285,17 +270,17 @@ impl SiteController {
             },
             false => {
                 self.set_state(SiteState::Down).await;
-                now + self.config.keep_alive
+                now + Duration::from_secs(self.config.keep_alive)
             }
         }
     }
 
     async fn start(&self, started_sender: &BroadSender<()>) {    
         // Start the server
-        if !try_mark_started(self.config).await {
-            trace!("Site {} cannot be started yet (under cooldown)", self.config.name);
-            return;
-        }
+        // if !try_mark_started(self.config).await {
+        //     trace!("Site {} cannot be started yet (under cooldown)", self.config.name);
+        //     return;
+        // }
         info!("Starting service {}", self.config.name);
         let r = run_command(&format!("systemctl start {}", self.config.service_name)).await;
         if let Err(e) = r {
@@ -318,34 +303,26 @@ impl SiteController {
             }
             sleep(Duration::from_millis(self.config.start_check_interval_ms.0)).await;
         };
-        let end = Instant::now();
         self.set_state(state).await;
         let _ = started_sender.send(());
-
-        // Log the start duration
-        if state == SiteState::Up {
-            if let Err(e) = DATABASE.put_start_duration(&self.config.name, end - start, self.config.eta_sample_size.0) {
-                error!("Couldn't store start duration: {e}");
-            }
-        }
     }
 
     pub async fn handle(&self, mut start_receiver: Receiver<()>, started_sender: BroadSender<()>) {
-        let mut next_check: u64 = 0;
+        let mut next_check: DateTime<Utc> = Utc::now();
     
         loop {
-            let now = Utc::now().timestamp() as u64;
-            let to_wait = next_check.saturating_sub(now);
+            let now = Utc::now();
+            let to_wait = next_check.signed_duration_since(now);
             debug!("Waiting for {to_wait} seconds before checking site {}", self.config.name);
             
-            let sleep_task = sleep(Duration::from_secs(to_wait));
+            let sleep_task = sleep(to_wait.to_std().unwrap_or_default());
             let recv_task = start_receiver.recv();
     
             tokio::select! {
                 _ = sleep_task => next_check = self.check().await,
                 _ = recv_task => self.start(&started_sender).await,
             }
-        }        
+        }
     }
 }
 
@@ -361,12 +338,13 @@ pub fn get_controller(host: &String) -> Option<&'static SiteController> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SiteState {
     Unknown,
     Down,
     Up,
     Starting
+    // TODO: Allow tracking whether we started it or it was started externally
 }
 
 impl SiteState {
@@ -378,6 +356,6 @@ impl SiteState {
 #[derive(Debug, Clone, Copy)]
 enum ShouldShutdown {
     Now,
-    NotUntil(u64),
+    NotUntil(DateTime<Utc>),
 }
 

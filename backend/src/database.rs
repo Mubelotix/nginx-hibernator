@@ -1,18 +1,27 @@
 use anyhow::{Result as AnyResult, anyhow};
+use chrono::{DateTime, Utc};
 use heed::{
-    Database as HeedDatabase, EnvOpenOptions, byteorder::BigEndian, types::{SerdeBincode as Bincoded, SerdeJson as Jsoned, Str, U64}
+    BytesEncode, Database as HeedDatabase, EnvOpenOptions, byteorder::BigEndian, types::{Str, U64}
 };
+use serde::{Deserialize, Serialize};
 use std::{sync::LazyLock, time::Duration};
-use crate::{config::Config, server::ConnectionMetadata};
+use crate::{config::Config, controller::SiteState, server::ConnectionMetadata, bincoded::Bincoded};
 
 pub static DATABASE: LazyLock<Database> = LazyLock::new(Database::open);
 
 const LATEST_DB_VERSION: u64 = 0;
 
+#[derive(Serialize, Deserialize)]
+struct StateChangeKey {
+    pub service: String,
+    #[serde(with = "chrono::serde::ts_nanoseconds")]
+    pub timestamp: DateTime<Utc>,
+}
+
 pub struct Database {
     env: heed::Env,
-    connections: HeedDatabase<U64<BigEndian>, Jsoned<Vec<ConnectionMetadata>>>,
-    start_durations: HeedDatabase<Str, Bincoded<Vec<Duration>>>,
+    connections: HeedDatabase<U64<BigEndian>, Bincoded<Vec<ConnectionMetadata>>>,
+    states: HeedDatabase<Bincoded<StateChangeKey>, Bincoded<SiteState>>,
 }
 
 impl Database {
@@ -63,13 +72,13 @@ impl Database {
             .create_database(&mut wtxn, Some("connections"))
             .expect("couldn't create tokens database");
 
-        let start_durations = env
-            .create_database(&mut wtxn, Some("start_durations"))
+        let states = env
+            .create_database(&mut wtxn, Some("states"))
             .expect("couldn't create tokens database");
 
         wtxn.commit().expect("couldn't commit transaction");
 
-        Database { env, connections, start_durations }
+        Database { env, connections, states }
     }
 
     pub fn put_connection_metadata(&self, at: u64, metadata: ConnectionMetadata) -> AnyResult<()> {
@@ -135,29 +144,77 @@ impl Database {
     pub fn get_start_duration_estimate(&self, name: &str, percentile: usize) -> AnyResult<Duration> {
         let rtxn = self.env.read_txn()?;
 
-        let values = self.start_durations.get(&rtxn, name)?.ok_or(anyhow!("No durations stored"))?;
+        let min = StateChangeKey {
+            service: name.to_string(),
+            timestamp: DateTime::from_timestamp_nanos(i64::MIN),
+        };
+        let max = StateChangeKey {
+            service: name.to_string(),
+            timestamp: DateTime::from_timestamp_nanos(i64::MAX),
+        };
+        let mut iter = self.states.rev_range(&rtxn, &(min..=max))?;
+
+        let mut values = Vec::new();
+        let mut last_started_time = None;
+        while let Some((key, state)) = iter.next().transpose()? {
+            match state {
+                SiteState::Up => {
+                    last_started_time = Some(key.timestamp);
+                }
+                SiteState::Starting => {
+                    if let Some(started_time) = last_started_time.take() {
+                        let duration = started_time.signed_duration_since(key.timestamp);
+                        if let Ok(d) = duration.to_std() {
+                            values.push(d);
+                        }
+                    }
+                }
+                _ => {
+                    last_started_time = None;
+                }
+            }
+        }
+
+        if values.is_empty() {
+            return Err(anyhow!("No durations stored"));
+        }
+
         let idx = (values.len() * percentile) / 100;
 
         Ok(values[idx])
     }
 
-    pub fn put_start_duration(&self, name: &str, value: Duration, sample_count: usize) -> AnyResult<()> {
+    pub fn update_state(&self, name: &str, state: SiteState) -> AnyResult<()> {
         let mut wtxn = self.env.write_txn()?;
 
-        if sample_count == 0 {
-            self.start_durations.delete(&mut wtxn, name)?;
-            return Ok(())
-        }
+        let key = StateChangeKey {
+            service: name.to_string(),
+            timestamp: Utc::now(),
+        };
 
-        let mut values = self.start_durations.get(&wtxn, name)?.unwrap_or_default();
-        values.push(value);
-        while values.len() > sample_count {
-            values.remove(0);
-        }
-
-        self.start_durations.put(&mut wtxn, name, &values)?;
+        self.states.put(&mut wtxn, &key, &state)?;
         wtxn.commit()?;
 
         Ok(())
+    }
+
+    pub fn get_last_state(&self, name: &str) -> AnyResult<(SiteState, DateTime<Utc>)> {
+        let rtxn = self.env.read_txn()?;
+
+        let min = StateChangeKey {
+            service: name.to_string(),
+            timestamp: DateTime::from_timestamp_nanos(0),
+        };
+        let max = StateChangeKey {
+            service: name.to_string(),
+            timestamp: DateTime::from_timestamp_nanos(i64::MAX),
+        };
+        let mut iter = self.states.rev_range(&rtxn, &(min..=max))?;
+
+        if let Some((key, state)) = iter.next().transpose()? {
+            Ok((state, key.timestamp))
+        } else {
+            Err(anyhow!("No state found"))
+        }
     }
 }

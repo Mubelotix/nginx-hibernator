@@ -169,7 +169,6 @@ async fn handle_connection(mut stream: TcpStream) -> ConnectionMetadata {
         .take_while(|line| !line.is_empty())
         .collect()
         .await;
-    debug!("Request: {http_request:?}");
 
     // Extract metadata early
     let is_browser = http_request.iter().any(|line| line.to_lowercase() == "sec-fetch-mode: navigate");

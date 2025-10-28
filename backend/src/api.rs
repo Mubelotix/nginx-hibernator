@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncWriteExt, net::TcpStream};
 use url::Url;
@@ -15,12 +16,11 @@ pub struct HistoryEntry {
 pub struct ServiceInfo {
     pub name: String,
     pub state: String,
-    pub last_changed: u64,
+    #[serde(with = "chrono::serde::ts_seconds")]
+    pub last_changed: DateTime<Utc>,
 }
 
 pub async fn handle_services_request(mut stream: TcpStream) {
-    trace!("Handling services request");
-
     // SAFETY: This is safe because SITE_CONTROLLERS is only mutated once during initialization
     #[allow(static_mut_refs)]
     let services: Vec<ServiceInfo> = unsafe {
@@ -35,7 +35,7 @@ pub async fn handle_services_request(mut stream: TcpStream) {
             ServiceInfo {
                 name: controller.config.name.to_string(),
                 state: state_str.to_string(),
-                last_changed,
+                last_changed
             }
         }).collect()
     };

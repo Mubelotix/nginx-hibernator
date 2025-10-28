@@ -128,6 +128,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bincode2"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f49f6183038e081170ebbbadee6678966c7d54728938a3e7de7f4e780770318f"
+dependencies = [
+ "byteorder",
+ "serde",
+]
+
+[[package]]
 name = "bitflags"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -189,6 +199,7 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
+ "serde",
  "wasm-bindgen",
  "windows-link",
 ]
@@ -594,6 +605,7 @@ name = "nginx-hibernator"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "bincode2",
  "chrono",
  "env_logger",
  "globset",

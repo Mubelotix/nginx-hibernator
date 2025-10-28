@@ -13,14 +13,13 @@ mod config;
 use config::*;
 mod server;
 use server::*;
-mod cooldown;
-use cooldown::*;
 mod util;
 use util::*;
 mod controller;
 use controller::*;
 mod database;
 mod api;
+mod bincoded;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() { 
