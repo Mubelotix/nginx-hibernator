@@ -73,6 +73,6 @@ defineProps<{
 
 .breadcrumb-current {
   color: #1f2937;
-  font-weight: 600;
+  font-weight: 400;
 }
 </style>

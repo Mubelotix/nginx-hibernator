@@ -193,7 +193,7 @@ onMounted(() => {
 
 .service-header h2 {
   font-size: 28px;
-  font-weight: 700;
+  font-weight: 400;
   color: #1f2937;
   margin: 0;
 }
