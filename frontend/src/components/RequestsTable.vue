@@ -17,6 +17,7 @@ const route = useRoute()
 const entries = ref<HistoryEntry[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)
+const selectedEntry = ref<HistoryEntry | null>(null)
 
 const fetchHistory = async (before?: number, after?: number, updateUrl = true) => {
   try {
@@ -166,6 +167,21 @@ const formatTime = (timestamp: number) => {
   const date = new Date(timestamp * 1000)
   return date.toLocaleTimeString()
 }
+
+const selectEntry = (entry: HistoryEntry) => {
+  selectedEntry.value = entry
+}
+
+const closeSidePanel = () => {
+  selectedEntry.value = null
+}
+
+const getHeaders = (request: string[]) => {
+  if (request.length <= 1) return []
+  
+  // Skip the first line (request line) and parse headers
+  return request.slice(1).filter(line => line.trim() !== '')
+}
 </script>
 
 <template>
@@ -191,7 +207,12 @@ const formatTime = (timestamp: number) => {
             </TableRow>
           </TableHeader>
           <TableBody>
-            <TableRow v-for="(entry, index) in entries" :key="index" class="request-row">
+            <TableRow 
+              v-for="(entry, index) in entries" 
+              :key="index" 
+              class="request-row"
+              @click="selectEntry(entry)"
+            >
               <TableCell class="font-mono text-xs">{{ formatTime(entry.timestamp) }}</TableCell>
               <TableCell class="font-mono method-cell">{{ parseRequestLine(entry.request).method }}</TableCell>
               <TableCell class="font-mono text-xs url-cell" :title="parseRequestLine(entry.request).url">
@@ -222,6 +243,63 @@ const formatTime = (timestamp: number) => {
         >
           Next →
         </button>
+      </div>
+    </div>
+
+    <!-- Side Panel -->
+    <div v-if="selectedEntry" class="side-panel-overlay" @click="closeSidePanel">
+      <div class="side-panel" @click.stop>
+        <div class="side-panel-header">
+          <h2>Request Details</h2>
+          <button @click="closeSidePanel" class="close-button">×</button>
+        </div>
+        
+        <div class="side-panel-content">
+          <!-- Request Line -->
+          <div class="section">
+            <h3>Request Line</h3>
+            <div class="request-line">
+              {{ selectedEntry.request[0] }}
+            </div>
+          </div>
+
+          <!-- Headers -->
+          <div class="section">
+            <h3>Headers</h3>
+            <div class="headers-list">
+              <div 
+                v-for="(header, index) in getHeaders(selectedEntry.request)" 
+                :key="index"
+                class="header-item"
+              >
+                {{ header }}
+              </div>
+            </div>
+          </div>
+
+          <!-- Metadata -->
+          <div class="section">
+            <h3>Metadata</h3>
+            <div class="metadata">
+              <div class="metadata-item">
+                <span class="metadata-label">Timestamp:</span>
+                <span class="metadata-value">{{ new Date(selectedEntry.timestamp * 1000).toLocaleString() }}</span>
+              </div>
+              <div class="metadata-item">
+                <span class="metadata-label">Result:</span>
+                <span class="metadata-value" :class="getStatusClass(selectedEntry.result)">{{ selectedEntry.result }}</span>
+              </div>
+              <div class="metadata-item">
+                <span class="metadata-label">Status Code:</span>
+                <span class="metadata-value" :class="getStatusClass(selectedEntry.result)">{{ getStatusText(selectedEntry.result) }}</span>
+              </div>
+              <div class="metadata-item" v-if="selectedEntry.service">
+                <span class="metadata-label">Service:</span>
+                <span class="metadata-value">{{ selectedEntry.service }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -317,6 +395,7 @@ const formatTime = (timestamp: number) => {
 :deep(.request-row) {
   border-bottom: 1px solid #f3f4f6;
   transition: background-color 0.1s;
+  cursor: pointer;
 }
 
 :deep(.request-row:hover) {
@@ -378,5 +457,174 @@ const formatTime = (timestamp: number) => {
 
 .font-mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+}
+
+/* Side Panel Styles */
+.side-panel-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: flex-end;
+  z-index: 1000;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.side-panel {
+  width: 600px;
+  max-width: 90vw;
+  background: #ffffff;
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.1);
+  display: flex;
+  flex-direction: column;
+  animation: slideIn 0.2s ease;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.side-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f9fafb;
+}
+
+.side-panel-header h2 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1f2937;
+  margin: 0;
+}
+
+.close-button {
+  background: none;
+  border: none;
+  font-size: 28px;
+  color: #6b7280;
+  cursor: pointer;
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+}
+
+.close-button:hover {
+  background-color: #e5e7eb;
+  color: #1f2937;
+}
+
+.side-panel-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.section {
+  margin-bottom: 24px;
+}
+
+.section h3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+  margin: 0 0 12px 0;
+}
+
+.request-line {
+  background: #f9fafb;
+  padding: 12px;
+  border-radius: 4px;
+  border: 1px solid #e5e7eb;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  font-size: 13px;
+  color: #1f2937;
+  word-break: break-all;
+}
+
+.headers-list {
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.header-item {
+  padding: 10px 12px;
+  border-bottom: 1px solid #f3f4f6;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  font-size: 12px;
+  color: #1f2937;
+  background: #ffffff;
+  word-break: break-all;
+}
+
+.header-item:last-child {
+  border-bottom: none;
+}
+
+.header-item:hover {
+  background: #f9fafb;
+}
+
+.metadata {
+  background: #f9fafb;
+  padding: 12px;
+  border-radius: 4px;
+  border: 1px solid #e5e7eb;
+}
+
+.metadata-item {
+  display: flex;
+  padding: 8px 0;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.metadata-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.metadata-item:first-child {
+  padding-top: 0;
+}
+
+.metadata-label {
+  font-weight: 600;
+  color: #6b7280;
+  font-size: 12px;
+  min-width: 120px;
+}
+
+.metadata-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  font-size: 12px;
+  color: #1f2937;
+  flex: 1;
 }
 </style>
