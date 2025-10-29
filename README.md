@@ -2,10 +2,31 @@
 
 Automatically hibernate and wake up nginx-proxied sites based on activity, reducing resource usage for idle services.
 
-You can hibernate any service that :
+You can hibernate any service that:
 - Provides an HTTP API
 - Is proxied by nginx
 - Can be started and stopped by systemd
+
+## Features
+
+- **Automatic Hibernation**: Services are automatically stopped after a configurable period of inactivity
+- **Seamless Wake-up**: Incoming requests trigger service startup
+- **Landing Page**: Customizable landing page displayed while the service is starting
+- **Web Dashboard**: Monitor service states, view metrics, and analyze activity patterns through a minimalistic frontend
+- **Persistent Storage**: Request history and state transitions stored in LMDB for efficient querying
+- **Smart ETA Calculation**: Provides startup time estimates based on historical data
+- **Flexible Configuration**: Per-service settings for timeouts, proxy modes, IP filtering, and more
+
+## Dashboard
+
+The hibernator includes a modern web-based dashboard for monitoring and managing your services:
+
+- **Services Overview**: Real-time view of all services and their current states (up/down/starting)
+- **Service Metrics**: Uptime percentage, hibernation count, and startup time distribution
+- **State History**: Timeline of service state transitions
+- **Request Logs**: Detailed access logs with request metadata and results
+
+Access the dashboard at `http://localhost:7878` (or your configured `hibernator_port`).
 
 ## Installing
 
@@ -141,6 +162,24 @@ start_timeout_ms = 300000
 start_check_interval_ms = 100
 ```
 
+### Dashboard Setup
+
+The frontend is built with Vue 3, TypeScript, and Vite. To run it in development mode:
+
+```bash
+cd frontend
+bun install
+bun run dev
+```
+
+For production, build the frontend and serve the static files:
+
+```bash
+cd frontend
+bun run build
+# Serve the dist/ directory with your preferred web server
+```
+
 ## Development
 
 ### Dependencies
@@ -148,12 +187,22 @@ start_check_interval_ms = 100
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh      # Rust
 sudo apt update && sudo apt install build-essential -y              # GCC
+curl -fsSL https://bun.sh/install | bash                            # Bun (for frontend)
 ```
 
 ### Building
 
+Backend:
 ```bash
+cd backend
 cargo build
+```
+
+Frontend:
+```bash
+cd frontend
+bun install
+bun run build
 ```
 
 ### Running
@@ -161,16 +210,25 @@ cargo build
 Setup a dev environment (one-time only):
 
 ```bash
-sh dev/setup.sh
+cd backend/dev
+sh setup.sh
 ```
 
 Run the hibernator (it will also build it):
 
 ```bash
-sh dev/run.sh
+cd backend/dev
+sh run.sh
 ```
 
-Check its behavior on `http://localhost:80`.
+Run the frontend dashboard in development mode:
+
+```bash
+cd frontend
+bun run dev
+```
+
+Check the backend behavior on `http://localhost:80` and the dashboard on `http://localhost:5173`.
 
 ## Security considerations
 
@@ -189,6 +247,27 @@ The content of the config file is not sanitized.
 **Do not rely on user input to generate the config file.**
 
 Malicious configurations could trigger code execution as root, and XSS injections in waiting pages.
+
+</details>
+
+## Architecture
+
+- **Backend**: Rust-based proxy server and service controller
+  - Monitors nginx access logs for activity
+  - Controls systemd services (start/stop)
+  - Serves API endpoints for the dashboard
+  - Stores data in LMDB (Lightning Memory-Mapped Database)
+  
+- **Frontend**: Vue 3 + TypeScript SPA
+  - Real-time service monitoring
+  - Historical data visualization
+  - Responsive UI built with Tailwind CSS and shadcn-vue components
+
+- **Database**: LMDB-based persistent storage
+  - Connection history with request metadata
+  - Service state transitions with timestamps
+  - Startup duration samples for ETA calculation
+  - Efficient append-only design with range queries
 
 ## Alternatives
 
