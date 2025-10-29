@@ -84,11 +84,13 @@ maybe_sudo mv "/tmp/$filename" "/usr/local/bin/nginx-hibernator"
 maybe_sudo chmod +x "/usr/local/bin/nginx-hibernator"
 
 echo "[6/7] Installing nginx-hibernator frontend at /usr/share/nginx/html/nginx-hibernator-frontend"
+maybe_sudo rm -rf "/usr/share/nginx/html/nginx-hibernator-frontend"
 maybe_sudo unzip -o "/tmp/frontend.zip" -d "/usr/share/nginx/html/nginx-hibernator-frontend"
 maybe_sudo chown -R www-data:www-data "/usr/share/nginx/html/nginx-hibernator-frontend"
 maybe_sudo chmod -R 755 "/usr/share/nginx/html/nginx-hibernator-frontend"
 
 echo "[7/7] Installing nginx-hibernator default landing page at /usr/share/nginx/html/nginx-hibernator-landing"
+maybe_sudo rm -rf "/usr/share/nginx/html/nginx-hibernator-landing"
 maybe_sudo unzip -o "/tmp/landing.zip" -d "/usr/share/nginx/html/nginx-hibernator-landing"
 maybe_sudo chown -R www-data:www-data "/usr/share/nginx/html/nginx-hibernator-landing"
 maybe_sudo chmod -R 755 "/usr/share/nginx/html/nginx-hibernator-landing"
