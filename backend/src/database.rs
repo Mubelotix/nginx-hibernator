@@ -144,7 +144,7 @@ impl Database {
         Ok(results)
     }
 
-    pub fn get_state_history(&self, service: &str, before: Option<DateTime<Utc>>, after: Option<DateTime<Utc>>, min_results: usize) -> AnyResult<Vec<(DateTime<Utc>, DateTime<Utc>, String, SiteState)>> {
+    pub fn get_state_history(&self, service: &str, before: Option<DateTime<Utc>>, after: Option<DateTime<Utc>>, min_results: usize) -> AnyResult<Vec<(DateTime<Utc>, DateTime<Utc>, SiteState)>> {
         let rtxn = self.env.read_txn()?;
 
         let mut raw_results = Vec::new();
@@ -166,7 +166,7 @@ impl Database {
                 let mut last_state: Option<SiteState> = None;
                 
                 while let Some((key, state)) = iter.next().transpose()? {
-                    raw_results.push((key.timestamp, key.service.clone(), state));
+                    raw_results.push((key.timestamp, state));
                     
                     // Count deduplicated entries (state changes)
                     match &last_state {
@@ -204,7 +204,7 @@ impl Database {
                 
                 while let Some((key, state)) = iter.next().transpose()? {
                     if key.timestamp > after {
-                        raw_results.push((key.timestamp, key.service.clone(), state));
+                        raw_results.push((key.timestamp, state));
                         
                         // Count deduplicated entries (state changes)
                         match &last_state {
@@ -231,29 +231,29 @@ impl Database {
 
         // Convert raw results into ranges
         let mut ranges = Vec::new();
-        let mut current_range: Option<(DateTime<Utc>, String, SiteState)> = None;
+        let mut current_range: Option<(DateTime<Utc>, SiteState)> = None;
 
-        for (timestamp, service_name, state) in raw_results {
+        for (timestamp, state) in raw_results {
             match &current_range {
                 None => {
                     // First state
-                    current_range = Some((timestamp, service_name, state));
+                    current_range = Some((timestamp, state));
                 }
-                Some((start_time, current_service, current_state)) => {
-                    if current_state == &state && current_service == &service_name {
+                Some((start_time, current_state)) => {
+                    if current_state == &state {
                         // Same state continues, extend the range (do nothing, we'll use timestamp as end when it changes)
                     } else {
                         // State changed, emit the previous range
-                        ranges.push((*start_time, timestamp, current_service.clone(), *current_state));
-                        current_range = Some((timestamp, service_name, state));
+                        ranges.push((*start_time, timestamp, *current_state));
+                        current_range = Some((timestamp, state));
                     }
                 }
             }
         }
 
         // Emit the last state (it's still ongoing, so end_time = now)
-        if let Some((start_time, service_name, state)) = current_range {
-            ranges.push((start_time, Utc::now(), service_name, state));
+        if let Some((start_time, state)) = current_range {
+            ranges.push((start_time, Utc::now(), state));
         }
 
         Ok(ranges)

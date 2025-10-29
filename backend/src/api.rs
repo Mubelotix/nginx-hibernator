@@ -205,7 +205,7 @@ pub async fn handle_state_history_request(stream: TcpStream, url: &Url) {
     }
 
     // Convert to API format
-    let entries: Vec<StateHistoryEntry> = all_ranges.into_iter().map(|(start_time, end_time, service_name, state)| {
+    let entries: Vec<StateHistoryEntry> = all_ranges.into_iter().map(|(start_time, end_time, state)| {
         let state_str = match state {
             SiteState::Unknown => "unknown",
             SiteState::Down => "down",
@@ -215,7 +215,7 @@ pub async fn handle_state_history_request(stream: TcpStream, url: &Url) {
         StateHistoryEntry {
             start_time,
             end_time,
-            service: service_name,
+            service: service.unwrap_or("unknown").to_string(),
             state: state_str.to_string(),
         }
     }).collect();
