@@ -13,19 +13,18 @@
             background: #101448;
             min-height: 100vh;
             display: flex;
+            flex-direction: column;
             align-items: center;
             justify-content: center;
             color: white;
         }
-        .container {
-            text-align: center;
-            padding: 2rem;
-            max-width: 600px;
-        }
         #lottie-animation {
-            width: 300px;
-            height: 300px;
-            margin: 0 auto 2rem;
+            width: 100%;
+            height: 0;
+            flex-grow: 3;
+        }
+        .grower {
+            flex-grow: 1;
         }
         h1 {
             font-size: 2rem;
@@ -66,21 +65,25 @@
     </style>
 </head>
 <body>
-    <div class="container">
-        <div id="lottie-animation"></div>
-        <h1>Server Starting...</h1>
-        <p id="message">
-            The server is currently booting up. The page will reload automatically once it's ready.
-        </p>
-        <div class="progress-bar" id="progress-container" style="display: none;">
-            <div class="progress-fill" id="progress-fill"></div>
-        </div>
-        <div class="footer">
-            <p>
-                Powered by <a href="https://github.com/mubelotix/nginx-site-hibernator" target="_blank" rel="noopener noreferrer">nginx-site-hibernator</a>
-            </p>
-        </div>
+    <div class="grower"></div>
+
+    <div id="lottie-animation"></div>
+
+    <h1>Server Starting...</h1>
+    <p id="message">
+        The server is currently booting up. The page will reload automatically once it's ready.
+    </p>
+    <div class="progress-bar" id="progress-container" style="display: none;">
+        <div class="progress-fill" id="progress-fill"></div>
     </div>
+    <div class="footer">
+        <p>
+            Powered by <a href="https://github.com/mubelotix/nginx-site-hibernator" target="_blank" rel="noopener noreferrer">nginx-site-hibernator</a>
+        </p>
+    </div>
+
+    <div class="grower"></div>
+
     <script>
         // Load Lottie animation
         const animation = lottie.loadAnimation({
