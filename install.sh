@@ -10,6 +10,12 @@ if ! command -v curl >/dev/null 2>&1; then
     exit 1
 fi
 
+# Check if unzip is installed
+if ! command -v unzip >/dev/null 2>&1; then
+    echo "${red}Error: unzip is not installed. Please install unzip and try again.${normal}"
+    exit 1
+fi
+
 # Run command with sudo only if not already running as root
 maybe_sudo() {
     if [ "$(id -u)" -eq 0 ]; then
