@@ -63,11 +63,19 @@ const formatDuration = (ms: number | null) => {
   return `${(ms / 60000).toFixed(1)}m`
 }
 
-const uptimeColor = computed(() => {
+const hibernatingColor = computed(() => {
   if (!metrics.value) return 'text-gray-600'
-  const uptime = metrics.value.uptime_percentage
-  if (uptime >= 95) return 'text-green-600'
-  if (uptime >= 80) return 'text-yellow-600'
+  const hibernating = metrics.value.hibernating_percentage
+  if (hibernating >= 80) return 'text-green-600'
+  if (hibernating >= 50) return 'text-yellow-600'
+  return 'text-orange-600'
+})
+
+const availabilityColor = computed(() => {
+  if (!metrics.value) return 'text-gray-600'
+  const availability = metrics.value.available_percentage
+  if (availability >= 95) return 'text-green-600'
+  if (availability >= 80) return 'text-yellow-600'
   return 'text-red-600'
 })
 
@@ -97,15 +105,28 @@ onMounted(() => {
     <div v-else-if="error" class="error">Error: {{ error }}</div>
     
     <div v-else-if="metrics" class="metrics-grid">
-      <!-- Uptime Card -->
+      <!-- Hibernating Percentage Card -->
       <Card>
         <CardHeader>
-          <CardTitle>Uptime</CardTitle>
-          <CardDescription>Service availability over selected period</CardDescription>
+          <CardTitle>Hibernating</CardTitle>
+          <CardDescription>How often service is hibernating</CardDescription>
         </CardHeader>
         <CardContent>
-          <div class="metric-value" :class="uptimeColor">
-            {{ metrics.uptime_percentage.toFixed(2) }}%
+          <div class="metric-value" :class="hibernatingColor">
+            {{ metrics.hibernating_percentage.toFixed(2) }}%
+          </div>
+        </CardContent>
+      </Card>
+
+      <!-- Available Percentage Card -->
+      <Card>
+        <CardHeader>
+          <CardTitle>Availability</CardTitle>
+          <CardDescription>Service state tracked and well-known</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div class="metric-value" :class="availabilityColor">
+            {{ metrics.available_percentage.toFixed(2) }}%
           </div>
         </CardContent>
       </Card>

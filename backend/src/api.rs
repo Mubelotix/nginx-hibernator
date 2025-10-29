@@ -33,7 +33,8 @@ pub struct ServiceInfo {
 
 #[derive(Serialize, Deserialize)]
 pub struct ServiceMetrics {
-    pub uptime_percentage: f64,
+    pub hibernating_percentage: f64,
+    pub available_percentage: f64,
     pub total_hibernations: usize,
     pub start_times_histogram: Vec<u64>, // Buckets of start times in milliseconds
     pub start_duration_estimate_ms: Option<u64>, // From get_start_duration_estimate
@@ -250,7 +251,7 @@ pub async fn handle_metrics_request(mut stream: TcpStream, service_name: &str, u
 
     // Calculate uptime percentage and hibernations
     let mut total_uptime_ms = 0;
-    let mut total_period_ms = 0;
+    let mut total_available_ms = 0;
     let mut total_hibernations = 0;
     let mut start_durations_ms = Vec::new();
 
@@ -263,35 +264,39 @@ pub async fn handle_metrics_request(mut stream: TcpStream, service_name: &str, u
             (SiteState::Unknown, _) | (_, SiteState::Unknown) => (),
             (SiteState::Down | SiteState::Starting, SiteState::Down | SiteState::Starting) => {
                 // Stayed down
-                total_period_ms += duration_ms;
+                total_available_ms += duration_ms;
             },
             (SiteState::Down | SiteState::Starting, SiteState::Up) => {
                 // Went up
-                total_period_ms += duration_ms;
+                total_available_ms += duration_ms;
 
                 if state1 == &SiteState::Starting {
-                            println!("Duration between {} and {} is {} ms", timestamp1, timestamp2, duration_ms);
-
                     // Record start duration
                     start_durations_ms.push(duration_ms);
                 }
             },
             (SiteState::Up, SiteState::Down | SiteState::Starting) => {
                 // Went down
-                total_period_ms += duration_ms;
+                total_available_ms += duration_ms;
                 total_uptime_ms += duration_ms;
                 total_hibernations += 1;
             }
             (SiteState::Up, SiteState::Up) => {
                 // Stayed up
-                total_period_ms += duration_ms;
+                total_available_ms += duration_ms;
                 total_uptime_ms += duration_ms;
             }
         }
     }
 
-    let uptime_percentage = if total_period_ms > 0 {
-        (total_uptime_ms as f64 / total_period_ms as f64) * 100.0
+    let hibernating_percentage = if total_available_ms > 0 {
+        ((total_available_ms - total_uptime_ms) as f64 / total_available_ms as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    let available_percentage = if seconds > 0 {
+        (total_available_ms as f64 / (seconds as f64 * 1000.0)) * 100.0
     } else {
         0.0
     };
@@ -299,9 +304,9 @@ pub async fn handle_metrics_request(mut stream: TcpStream, service_name: &str, u
     // Create histogram with buckets (0-1s, 1-5s, 5-10s, 10-30s, 30s+)
     let histogram = vec![
         start_durations_ms.iter().filter(|&&d| d < 1000).count() as u64,
-        start_durations_ms.iter().filter(|&&d| d >= 1000 && d < 5000).count() as u64,
-        start_durations_ms.iter().filter(|&&d| d >= 5000 && d < 10000).count() as u64,
-        start_durations_ms.iter().filter(|&&d| d >= 10000 && d < 30000).count() as u64,
+        start_durations_ms.iter().filter(|&&d| (1000..5000).contains(&d)).count() as u64,
+        start_durations_ms.iter().filter(|&&d| (5000..10000).contains(&d)).count() as u64,
+        start_durations_ms.iter().filter(|&&d| (10000..30000).contains(&d)).count() as u64,
         start_durations_ms.iter().filter(|&&d| d >= 30000).count() as u64,
     ];
 
@@ -312,7 +317,8 @@ pub async fn handle_metrics_request(mut stream: TcpStream, service_name: &str, u
         .map(|d| d.as_millis() as u64);
 
     let metrics = ServiceMetrics {
-        uptime_percentage,
+        hibernating_percentage,
+        available_percentage,
         total_hibernations,
         start_times_histogram: histogram,
         start_duration_estimate_ms,
