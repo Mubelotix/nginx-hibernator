@@ -60,7 +60,7 @@
             height: 100%;
             background: white;
             border-radius: 3px;
-            transition: width 0.3s ease;
+            transition: width 0.1s linear;
         }
     </style>
 </head>
@@ -94,45 +94,81 @@
             path: '/hibernator-landing/servers.json'
         });
 
-        let keep_alive = KEEP_ALIVE;
-        let done_ms = DONE_MS;
-        let duration_ms = DURATION_MS;
+        let keep_alive, done_ms, duration_ms;
+        try {
+            keep_alive = KEEP_ALIVE;
+            done_ms = DONE_MS;
+            duration_ms = DURATION_MS;
+        } catch (e) {
+            // Defaults for dev environment
+            keep_alive = 5;
+            done_ms = 0;
+            duration_ms = 0;
+        }
 
-        // Auto-reload logic
-        setTimeout(() => {
-            window.location.reload();
+        // Auto-reload logic - fetch and check if still landing page
+        setInterval(() => {
+            fetch(window.location.href, { cache: 'no-store' })
+                .then(response => response.text())
+                .then(html => {
+                    // If the response doesn't contain "Server Starting...", the server might be ready
+                    if (!html.includes('Server Starting...')) {
+                        window.location.reload();
+                    }
+                })
+                .catch(error => {
+                    console.error('Error checking server status:', error);
+                });
         }, Math.min(keep_alive * 1000, 1000));
 
+        if (duration_ms <= 0) {
+            // If duration is unknown, skip progress bar and countdown
+            throw new Error("Unknown duration, skipping progress bar and countdown.");
+        }
+
         // Progress and ETA display
-        if (done_ms > 0 && duration_ms > 0) {
-            const remaining_ms = duration_ms - done_ms;
+        const startTime = Date.now();
+        const initialRemaining_ms = duration_ms - done_ms;
+        const progress = (done_ms / duration_ms) * 100;
+
+        // Show and update progress bar
+        const progressContainer = document.getElementById('progress-container');
+        const progressFill = document.getElementById('progress-fill');
+        const message = document.getElementById('message');
+        
+        progressContainer.style.display = 'block';
+        progressFill.style.width = `${progress}%`;
+
+        // Update progress bar smoothly and frequently
+        function updateProgressBar() {
+            const elapsed = Date.now() - startTime;
+            const totalElapsed = done_ms + elapsed;
+            const currentProgress = Math.min(98, (totalElapsed / duration_ms) * 100);
+            progressFill.style.width = `${currentProgress}%`;
+        }
+
+        // Update countdown text (only needs to update once per second)
+        function updateCountdown() {
+            const elapsed = Date.now() - startTime;
+            const remaining_ms = Math.max(0, initialRemaining_ms - elapsed);
             const remaining = Math.ceil(remaining_ms / 1000);
-            const progress = (done_ms / duration_ms) * 100;
-
+            
             if (remaining > 0) {
-                // Update message
-                const message = document.getElementById('message');
                 message.innerHTML = `The server is currently booting up. Estimated time remaining: <strong>${remaining} second${remaining !== 1 ? 's' : ''}</strong>.`;
-
-                // Show and update progress bar
-                const progressContainer = document.getElementById('progress-container');
-                const progressFill = document.getElementById('progress-fill');
-                
-                progressContainer.style.display = 'block';
-                progressFill.style.width = `${progress}%`;
-
-                // Animate progress bar
-                let currentProgress = progress;
-                const interval = setInterval(() => {
-                    if (currentProgress < 98) {
-                        currentProgress += 0.5;
-                        progressFill.style.width = `${currentProgress}%`;
-                    } else {
-                        clearInterval(interval);
-                    }
-                }, 100);
+            } else {
+                message.innerHTML = `The server should be ready soon...`;
             }
         }
+
+        // Initial updates
+        updateProgressBar();
+        updateCountdown();
+        
+        // Update progress bar frequently for smooth animation (10 times per second)
+        setInterval(updateProgressBar, 100);
+        
+        // Update countdown text once per second
+        setInterval(updateCountdown, 1000);
     </script>
 </body>
 </html>
