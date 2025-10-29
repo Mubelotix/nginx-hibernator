@@ -1,6 +1,7 @@
 # Top-level configuration options
 hibernator_port = 7878
 database_path = "./dev/data.mdb"
+landing_folder = "../landing"
 
 # Site-specific configuration block
 [[sites]]

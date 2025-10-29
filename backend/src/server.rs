@@ -1,5 +1,5 @@
 use std::time::Duration;
-use crate::{Config, ProxyMode, SiteConfig, api::{handle_history_request, handle_metrics_request, handle_service_config_request, handle_services_request, handle_state_history_request}, controller::SiteController, database::DATABASE, get_controller, util::now};
+use crate::{landing, Config, ProxyMode, SiteConfig, api::{handle_history_request, handle_metrics_request, handle_service_config_request, handle_services_request, handle_state_history_request}, controller::SiteController, database::DATABASE, get_controller, util::now};
 use log::*;
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
@@ -96,7 +96,7 @@ pub async fn setup_server(config: &'static Config) {
             if let Ok((stream, _addr)) = listener.accept().await {
                 spawn(async move {
                     let at = now();
-                    let result = handle_connection(stream).await;
+                    let result = handle_connection(stream, config).await;
 
                     if result.result == ConnectionResult::ApiHandled {
                         return;
@@ -160,7 +160,7 @@ async fn try_proxy(port: u16, head: Vec<String>, body: Vec<u8>) -> anyhow::Resul
 }
 
 // It's ok to panic in this function, as it's only called in its own thread
-async fn handle_connection(mut stream: TcpStream) -> ConnectionMetadata {
+async fn handle_connection(mut stream: TcpStream, config: &'static Config) -> ConnectionMetadata {
     use ConnectionResult::*;
 
     let buf_reader = BufReader::new(&mut stream);
@@ -179,6 +179,7 @@ async fn handle_connection(mut stream: TcpStream) -> ConnectionMetadata {
 
     let first_line = http_request.first().expect("Request is empty");
     let path = first_line.split_whitespace().nth(1).expect("Request line is empty");
+
     if path.starts_with("/hibernator-api/") {
         // Handle hibernator API requests
         let url: Url = match Url::parse(&format!("http://_{path}")) {
@@ -300,20 +301,15 @@ async fn handle_connection(mut stream: TcpStream) -> ConnectionMetadata {
 
     if !should_proxy {
         debug!("Returning 503 right away");
-        let status_line = "HTTP/1.1 503 Service Unavailable";
-        let (retry_after, done, duration) = controller.get_progress().await.and_then(|(done, duration)| {
-            let remaining = duration.checked_sub(done).unwrap_or_default().as_secs();
-            if remaining > 0 { Some((format!("Retry-After: {remaining}\r\n"), done, duration)) } else { None }
-        }).unwrap_or_default();
-        let content = include_str!("../static/index.html")
-            .replace("DONE_MS", &done.as_millis().to_string())
-            .replace("DURATION_MS", &duration.as_millis().to_string())
-            .replace("KEEP_ALIVE", &controller.config.keep_alive.to_string());
-        let length = content.len();
-        let response = format!(
-            "{status_line}\r\nContent-Length: {length}\r\n{retry_after}\r\n{content}"
-        );
-        let _ = stream.write_all(response.as_bytes()).await;
+        let (done, duration) = controller.get_progress().await.unwrap_or_default();
+        let landing_folder = controller.config.landing_folder(config);
+        landing::serve_landing_page(
+            stream,
+            landing_folder,
+            done,
+            duration,
+            controller.config.keep_alive,
+        ).await;
 
         controller.trigger_start();
 

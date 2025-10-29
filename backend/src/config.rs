@@ -320,6 +320,11 @@ pub struct SiteConfig {
     /// The interval to check if the service started already, in milliseconds.
     #[serde(default)]
     pub start_check_interval_ms: StartCheckInterval,
+
+    /// Path to the landing page folder for this specific site.
+    /// If not set, uses the global landing_folder.
+    #[serde(default)]
+    pub landing_folder: Option<String>,
 }
 
 impl SiteConfig {
@@ -343,6 +348,13 @@ impl SiteConfig {
             None => String::from("/etc/nginx/sites-available/nginx-hibernator"),
         }
     }
+
+    pub fn landing_folder<'a>(&'a self, config: &'a Config) -> &'a str {
+        match &self.landing_folder {
+            Some(folder) => folder,
+            None => config.top_level.landing_folder(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -359,6 +371,12 @@ pub struct TopLevelConfig {
     /// Defaults to `./data.mdb`
     #[serde(default)]
     pub database_path: Option<String>,
+
+    /// Path to the landing page folder containing index.html and assets.
+    /// 
+    /// Defaults to `./landing`
+    #[serde(default)]
+    pub landing_folder: Option<String>,
 }
 
 impl TopLevelConfig {
@@ -373,6 +391,13 @@ impl TopLevelConfig {
         match &self.database_path {
             Some(p) => p,
             None => "./data.mdb"
+        }
+    }
+
+    pub fn landing_folder(&self) -> &str {
+        match &self.landing_folder {
+            Some(p) => p,
+            None => "./landing"
         }
     }
 }

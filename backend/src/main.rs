@@ -20,6 +20,7 @@ use controller::*;
 mod database;
 mod api;
 mod bincoded;
+mod landing;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() { 
@@ -83,6 +84,18 @@ async fn main() {
             if whitelist_ips.is_empty() {
                 panic!("Site {} whitelist_ips cannot be empty", site_config.name);
             }
+        }
+    }
+
+    // Make sure every site has an index.html in its landing folder
+    for site_config in &config.sites {
+        let landing_folder = site_config.landing_folder(config);
+        let index_path = Path::new(landing_folder).join("index.html");
+        if !index_path.exists() {
+            panic!(
+                "Site {} landing page doesn't exist at {:?}. Expected index.html in landing folder: {}",
+                site_config.name, index_path, landing_folder
+            );
         }
     }
 
