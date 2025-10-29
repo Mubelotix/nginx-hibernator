@@ -8,13 +8,21 @@ import Network from './components/Network.vue'
 import ServiceDetail from './components/ServiceDetail.vue'
 import ServiceDashboard from './components/ServiceDashboard.vue'
 import ServiceStates from './components/ServiceStates.vue'
+import Login from './components/Login.vue'
+import { isAuthenticated } from './lib/api'
 
 const router = createRouter({
   history: createWebHistory(),
   routes: [
     {
+      path: '/login',
+      component: Login,
+      meta: { requiresAuth: false },
+    },
+    {
       path: '/',
       component: AppLayout,
+      meta: { requiresAuth: true },
       children: [
         {
           path: '',
@@ -47,6 +55,19 @@ const router = createRouter({
       ],
     },
   ],
+})
+
+// Navigation guard to check authentication
+router.beforeEach((to, _from, next) => {
+  const requiresAuth = to.matched.some(record => record.meta.requiresAuth !== false)
+  
+  if (requiresAuth && !isAuthenticated()) {
+    next('/login')
+  } else if (to.path === '/login' && isAuthenticated()) {
+    next('/')
+  } else {
+    next()
+  }
 })
 
 const app = createApp(App)

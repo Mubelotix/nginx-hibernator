@@ -16,6 +16,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import type { StateHistoryEntry, ServiceState } from '@/types/api'
+import { apiFetch } from '@/lib/api'
 
 const props = defineProps<{
   serviceName?: string
@@ -50,7 +51,7 @@ const fetchStateHistory = async (before?: number, after?: number, updateUrl = tr
       url += `?${params.toString()}`
     }
     
-    const response = await fetch(url)
+    const response = await apiFetch(url)
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`)
     }

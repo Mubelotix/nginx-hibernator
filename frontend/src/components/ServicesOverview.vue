@@ -9,6 +9,7 @@ import {
 } from '@/components/ui/tooltip'
 import type { ServiceInfo } from '@/types/api'
 import { formatTime } from '@/lib/time'
+import { apiFetch } from '@/lib/api'
 
 const router = useRouter()
 const services = ref<ServiceInfo[]>([])
@@ -20,7 +21,7 @@ const fetchServices = async () => {
   try {
     error.value = null
     
-    const response = await fetch('/hibernator-api/services')
+    const response = await apiFetch('/hibernator-api/services')
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`)
     }

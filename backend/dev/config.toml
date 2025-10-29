@@ -2,6 +2,7 @@
 hibernator_port = 7878
 database_path = "./dev/data.mdb"
 landing_folder = "../landing"
+api_key_sha256 = "a2ae6a9ee724b61d83d3cb2ec4a4bfc5d72624008508511935f85a4227a92db6" # your-api-key
 
 # Site-specific configuration block
 [[sites]]

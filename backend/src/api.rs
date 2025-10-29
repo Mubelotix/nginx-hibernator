@@ -2,9 +2,10 @@ use chrono::{DateTime, Utc, Duration};
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncWriteExt, net::TcpStream};
 use url::Url;
-use crate::{controller::{SiteState, SITE_CONTROLLERS}, database::DATABASE, server::ConnectionMetadata};
+use crate::{controller::{SiteState, SITE_CONTROLLERS}, database::DATABASE, server::ConnectionMetadata, Config};
 use log::*;
 use std::collections::HashMap;
+use sha2::{Sha256, Digest};
 
 /// Helper function to send a JSON response
 async fn send_json_response(mut stream: TcpStream, data: &impl Serialize) -> Result<(), ()> {
@@ -27,6 +28,7 @@ async fn send_json_response(mut stream: TcpStream, data: &impl Serialize) -> Res
 /// Helper function to send an error response
 async fn send_error_response(mut stream: TcpStream, status_code: u16, message: &str) {
     let status_line = match status_code {
+        401 => "HTTP/1.1 401 Unauthorized",
         404 => "HTTP/1.1 404 Not Found",
         500 => "HTTP/1.1 500 Internal Server Error",
         _ => "HTTP/1.1 500 Internal Server Error",
@@ -34,6 +36,97 @@ async fn send_error_response(mut stream: TcpStream, status_code: u16, message: &
     let length = message.len();
     let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{message}");
     let _ = stream.write_all(response.as_bytes()).await;
+}
+
+/// Check if the provided API key is valid
+fn check_api_key(config: &Config, provided_key: Option<&str>) -> bool {
+    // If no API key is configured, allow all requests
+    let expected_hash = match &config.top_level.api_key_sha256 {
+        Some(hash) => hash,
+        None => return true,
+    };
+
+    // If API key is required but not provided, deny
+    let provided_key = match provided_key {
+        Some(key) => key,
+        None => return false,
+    };
+
+    // Hash the provided key and compare
+    let mut hasher = Sha256::new();
+    hasher.update(provided_key.as_bytes());
+    let result = hasher.finalize();
+    let provided_hash = format!("{:x}", result);
+
+    provided_hash == *expected_hash
+}
+
+/// Handle API requests with authentication
+pub async fn handle_api_request(
+    stream: TcpStream,
+    http_request: &[String],
+    path: &str,
+    config: &'static Config,
+) -> bool {
+    // Extract API key from headers
+    let api_key = http_request
+        .iter()
+        .find(|line| line.to_lowercase().starts_with("x-api-key: "))
+        .map(|line| &line[11..]);
+
+    // Check authentication
+    if !check_api_key(config, api_key) {
+        send_error_response(stream, 401, "Unauthorized: Invalid or missing API key").await;
+        return true;
+    }
+
+    // Parse URL
+    let url: Url = match Url::parse(&format!("http://_{path}")) {
+        Ok(url) => url,
+        Err(e) => {
+            debug!("Could not parse API request URL: {e}");
+            send_error_response(stream, 400, "Could not parse API request URL").await;
+            return true;
+        }
+    };
+
+    let segments: Vec<_> = url.path_segments().map(|c| c.collect()).unwrap_or_default();
+
+    // GET /hibernator-api/services
+    if segments.len() == 2 && segments[0] == "hibernator-api" && segments[1] == "services" {
+        handle_services_request(stream).await;
+        return true;
+    }
+
+    // GET /hibernator-api/services/:name/config
+    if segments.len() == 4 && segments[0] == "hibernator-api" && segments[1] == "services" && segments[3] == "config" {
+        let service_name = segments[2];
+        handle_service_config_request(stream, service_name).await;
+        return true;
+    }
+
+    // GET /hibernator-api/services/:name/metrics
+    if segments.len() == 4 && segments[0] == "hibernator-api" && segments[1] == "services" && segments[3] == "metrics" {
+        let service_name = segments[2];
+        handle_metrics_request(stream, service_name, &url).await;
+        return true;
+    }
+
+    // GET /hibernator-api/history
+    if segments.len() == 2 && segments[0] == "hibernator-api" && segments[1] == "history" {
+        handle_history_request(stream, &url).await;
+        return true;
+    }
+
+    // GET /hibernator-api/state-history
+    if segments.len() == 2 && segments[0] == "hibernator-api" && segments[1] == "state-history" {
+        handle_state_history_request(stream, &url).await;
+        return true;
+    }
+
+    // No matching endpoint
+    send_error_response(stream, 404, "API endpoint not found").await;
+    true
 }
 
 #[derive(Serialize, Deserialize)]

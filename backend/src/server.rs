@@ -1,11 +1,10 @@
 use std::time::Duration;
-use crate::{landing, Config, ProxyMode, SiteConfig, api::{handle_history_request, handle_metrics_request, handle_service_config_request, handle_services_request, handle_state_history_request}, controller::SiteController, database::DATABASE, get_controller, util::now};
+use crate::{landing, Config, ProxyMode, SiteConfig, api::handle_api_request, controller::SiteController, database::DATABASE, get_controller, util::now};
 use log::*;
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use tokio::{io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader}, net::{TcpListener, TcpStream}, spawn, time::{sleep, timeout}};
 use tokio_stream::{wrappers::LinesStream, StreamExt};
-use url::Url;
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub enum ConnectionResult {
@@ -181,59 +180,12 @@ async fn handle_connection(mut stream: TcpStream, config: &'static Config) -> Co
     let path = first_line.split_whitespace().nth(1).expect("Request line is empty");
 
     if path.starts_with("/hibernator-api/") {
-        // Handle hibernator API requests
-        let url: Url = match Url::parse(&format!("http://_{path}")) {
-            Ok(url) => url,
-            Err(e) => {
-                debug!("Could not parse API request URL: {e}");
-                let status_line = "HTTP/1.1 400 Bad Request";
-                let content = "Could not parse API request URL";
-                let length = content.len();
-                let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
-                let _ = stream.write_all(response.as_bytes()).await;
-                return ConnectionMetadata::new(http_request, InvalidUrl, is_browser, real_ip);
-            }
-        };
-
-        let segments: Vec<_> = url.path_segments().map(|c| c.collect()).unwrap_or_default();
-
-        // GET /hibernator-api/services
-        if segments.len() == 2 && segments[0] == "hibernator-api" && segments[1] == "services" {
-            handle_services_request(stream).await;
+        // Handle hibernator API requests with authentication
+        if handle_api_request(stream, &http_request, path, config).await {
             return ConnectionMetadata::api_handled();
         }
-
-        // GET /hibernator-api/services/:name/config
-        if segments.len() == 4 && segments[0] == "hibernator-api" && segments[1] == "services" && segments[3] == "config" {
-            let service_name = segments[2];
-            handle_service_config_request(stream, service_name).await;
-            return ConnectionMetadata::api_handled();
-        }
-
-        // GET /hibernator-api/services/:name/metrics
-        if segments.len() == 4 && segments[0] == "hibernator-api" && segments[1] == "services" && segments[3] == "metrics" {
-            let service_name = segments[2];
-            handle_metrics_request(stream, service_name, &url).await;
-            return ConnectionMetadata::api_handled();
-        }
-
-        // GET /hibernator-api/history
-        if segments.len() == 2 && segments[0] == "hibernator-api" && segments[1] == "history" {
-            handle_history_request(stream, &url).await;
-            return ConnectionMetadata::api_handled();
-        }
-
-        // GET /hibernator-api/state-history
-        if segments.len() == 2 && segments[0] == "hibernator-api" && segments[1] == "state-history" {
-            handle_state_history_request(stream, &url).await;
-            return ConnectionMetadata::api_handled();
-        }
-
-        let status_line = "HTTP/1.1 404 Not Found";
-        let content = "API endpoint not found";
-        let length = content.len();
-        let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
-        let _ = stream.write_all(response.as_bytes()).await;
+        // If handle_api_request returns false, it means no endpoint matched
+        // This shouldn't happen as handle_api_request handles 404s internally
         return ConnectionMetadata::api_handled();
     }
 

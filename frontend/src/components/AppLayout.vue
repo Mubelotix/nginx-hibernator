@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import type { ServiceInfo } from '@/types/api'
+import { apiFetch, clearApiKey } from '@/lib/api'
 import {
   Sidebar,
   SidebarContent,
@@ -16,11 +17,13 @@ import {
   SidebarMenuSubButton,
   SidebarProvider,
   SidebarInset,
+  SidebarFooter,
 } from '@/components/ui/sidebar'
-import { LayoutDashboard, Activity, Server, ChevronRight, Cctv } from 'lucide-vue-next'
+import { LayoutDashboard, Activity, Server, ChevronRight, Cctv, LogOut } from 'lucide-vue-next'
 import { formatServiceName } from '@/lib/utils'
 
 const route = useRoute()
+const router = useRouter()
 
 const menuItems = [
   {
@@ -46,7 +49,7 @@ let refreshInterval: number | null = null
 
 const fetchServices = async () => {
   try {
-    const response = await fetch('/hibernator-api/services')
+    const response = await apiFetch('/hibernator-api/services')
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`)
     }
@@ -67,6 +70,11 @@ const toggleService = (serviceName: string) => {
 
 const isServiceExpanded = (serviceName: string) => {
   return expandedServices.value.has(serviceName)
+}
+
+const handleLogout = () => {
+  clearApiKey()
+  router.push('/login')
 }
 
 onMounted(() => {
@@ -164,6 +172,16 @@ onUnmounted(() => {
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
+      <SidebarFooter>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton @click="handleLogout">
+              <LogOut />
+              <span>Logout</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarFooter>
     </Sidebar>
     <SidebarInset>
       <router-view />

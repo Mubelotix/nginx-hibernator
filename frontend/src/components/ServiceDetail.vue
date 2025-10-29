@@ -3,6 +3,7 @@ import { ref, onMounted, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import PageHeader from './PageHeader.vue'
 import { formatServiceName } from '@/lib/utils'
+import { apiFetch } from '@/lib/api'
 
 const route = useRoute()
 const serviceName = computed(() => route.params.name as string)
@@ -21,7 +22,7 @@ const fetchServiceInfo = async () => {
     error.value = null
     
     // Fetch service config
-    const configResponse = await fetch(`/hibernator-api/services/${encodeURIComponent(serviceName.value)}/config`)
+    const configResponse = await apiFetch(`/hibernator-api/services/${encodeURIComponent(serviceName.value)}/config`)
     if (!configResponse.ok) {
       throw new Error(`HTTP error! status: ${configResponse.status}`)
     }

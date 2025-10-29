@@ -3,6 +3,7 @@ import { ref, onMounted, watch, computed } from 'vue'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import type { ServiceMetrics } from '@/types/api'
+import { apiFetch } from '@/lib/api'
 
 const props = defineProps<{
   serviceName: string
@@ -24,7 +25,7 @@ const fetchMetrics = async () => {
     loading.value = true
     error.value = null
     
-    const response = await fetch(
+    const response = await apiFetch(
       `/hibernator-api/services/${encodeURIComponent(props.serviceName)}/metrics?seconds=${selectedPeriod.value}`
     )
     

@@ -377,6 +377,13 @@ pub struct TopLevelConfig {
     /// Defaults to `./landing`
     #[serde(default)]
     pub landing_folder: Option<String>,
+
+    /// SHA-256 hash of the API key required for accessing the hibernator API.
+    /// If not set, API authentication is disabled.
+    /// 
+    /// Generate with: `echo -n "your-api-key" | sha256sum`
+    #[serde(default)]
+    pub api_key_sha256: Option<String>,
 }
 
 impl TopLevelConfig {

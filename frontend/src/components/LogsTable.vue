@@ -10,6 +10,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import type { HistoryEntry, ConnectionResult } from '@/types/api'
+import { apiFetch } from '@/lib/api'
 
 const props = defineProps<{
   serviceName?: string
@@ -45,7 +46,7 @@ const fetchHistory = async (before?: number, after?: number, updateUrl = true) =
       url += `?${params.toString()}`
     }
     
-    const response = await fetch(url)
+    const response = await apiFetch(url)
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`)
     }
