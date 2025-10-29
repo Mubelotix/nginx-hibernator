@@ -26,6 +26,9 @@
         .grower {
             flex-grow: 1;
         }
+        .little-grower {
+            flex-grow: 0.5;
+        }
         h1 {
             font-size: 2rem;
             font-weight: 600;
@@ -33,20 +36,23 @@
         }
         #message {
             font-size: 1.125rem;
+            text-align: center;
             line-height: 1.6;
             margin: 0 0 2rem;
             opacity: 0.95;
         }
         .footer {
             font-size: 0.875rem;
-            opacity: 0.8;
+            opacity: 0.95;
+            max-width: 600px;
+            text-align: center;
         }
         .footer a {
             color: white;
-            text-decoration: underline;
         }
         .footer a:hover {
-            opacity: 0.8;
+            background: rgba(255, 255, 255, 0.25) !important;
+            transform: translateY(-2px);
         }
         .progress-bar {
             width: 50%;
@@ -62,36 +68,75 @@
             border-radius: 3px;
             transition: width 0.1s linear;
         }
+        #star-link {
+            text-decoration: none;
+            color: white;
+            font-size: 1.2rem;
+            font-weight: bold;
+            padding: 0.5rem 1rem;
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 6px;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        #star-animation {
+            width: 8rem;
+            height: 8rem;
+            margin: -3rem;
+        }
     </style>
 </head>
 <body>
     <div class="grower"></div>
-
     <div id="lottie-animation"></div>
+    <div class="little-grower"></div>
 
-    <h1>Server Starting...</h1>
+    <h1>Server is Waking Up!</h1>
+
     <p id="message">
-        The server is currently booting up. The page will reload automatically once it's ready.
+        Don't worry, everything is working perfectly!<br>
+        The page will reload automatically once it's ready.<br>
+        <span id="inner-message"></span>
     </p>
+
     <div class="progress-bar" id="progress-container" style="display: none;">
         <div class="progress-fill" id="progress-fill"></div>
     </div>
+
     <div class="footer">
-        <p>
-            Powered by <a href="https://github.com/mubelotix/nginx-site-hibernator" target="_blank" rel="noopener noreferrer">nginx-site-hibernator</a>
+        <p style="margin-bottom: 0.75rem;">
+            🌿 Powered by open-source software from Mubelotix.<br>
+            Add to your sites to help the planet!
         </p>
+        <div style="display: flex; align-items: center; justify-content: center; gap: 0rem;">
+            <a id="star-link" href="https://github.com/mubelotix/nginx-site-hibernator" target="_blank" rel="noopener noreferrer">
+                <div id="star-animation"></div>
+                Star us on GitHub!
+            </a>
+        </div>
     </div>
 
     <div class="grower"></div>
 
     <script>
-        // Load Lottie animation
+        // Load server animation
         const animation = lottie.loadAnimation({
             container: document.getElementById('lottie-animation'),
             renderer: 'canvas',
             loop: true,
             autoplay: true,
             path: '/hibernator-landing/servers.json'
+        });
+
+        // Load star animation
+        const starAnimation = lottie.loadAnimation({
+            container: document.getElementById('star-animation'),
+            renderer: 'svg',
+            loop: true,
+            autoplay: true,
+            path: '/hibernator-landing/star.json'
         });
 
         let keep_alive, done_ms, duration_ms;
@@ -134,7 +179,7 @@
         // Show and update progress bar
         const progressContainer = document.getElementById('progress-container');
         const progressFill = document.getElementById('progress-fill');
-        const message = document.getElementById('message');
+        const message = document.getElementById('inner-message');
         
         progressContainer.style.display = 'block';
         progressFill.style.width = `${progress}%`;
@@ -150,13 +195,15 @@
         // Update countdown text (only needs to update once per second)
         function updateCountdown() {
             const elapsed = Date.now() - startTime;
-            const remaining_ms = Math.max(0, initialRemaining_ms - elapsed);
+            const remaining_ms = initialRemaining_ms - elapsed;
             const remaining = Math.ceil(remaining_ms / 1000);
             
             if (remaining > 0) {
-                message.innerHTML = `The server is currently booting up. Estimated time remaining: <strong>${remaining} second${remaining !== 1 ? 's' : ''}</strong>.`;
+                message.innerHTML = `Estimated time remaining: <strong>${remaining} second${remaining !== 1 ? 's' : ''}</strong>.`;
+            } else if (remaining > -10) {
+                message.innerHTML = `Estimated time remaining: <strong>Soon™</strong>.`;
             } else {
-                message.innerHTML = `The server should be ready soon...`;
+                message.innerHTML = `The server is taking longer than expected.<br>Please be patient, or try again later.<br>Sorry for the inconvenience.`;
             }
         }
 
