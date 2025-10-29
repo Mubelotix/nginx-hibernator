@@ -3,33 +3,131 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Please wait...</title>
+    <title>Server Starting...</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bodymovin/5.12.2/lottie.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+        }
+        .container {
+            text-align: center;
+            padding: 2rem;
+            max-width: 600px;
+        }
+        #lottie-animation {
+            width: 300px;
+            height: 300px;
+            margin: 0 auto 2rem;
+        }
+        h1 {
+            font-size: 2rem;
+            font-weight: 600;
+            margin: 0 0 1rem;
+        }
+        #message {
+            font-size: 1.125rem;
+            line-height: 1.6;
+            margin: 0 0 2rem;
+            opacity: 0.95;
+        }
+        .footer {
+            font-size: 0.875rem;
+            opacity: 0.8;
+        }
+        .footer a {
+            color: white;
+            text-decoration: underline;
+        }
+        .footer a:hover {
+            opacity: 0.8;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+            overflow: hidden;
+            margin: 1.5rem 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background: white;
+            border-radius: 3px;
+            transition: width 0.3s ease;
+        }
+    </style>
 </head>
 <body>
-    <h1>Please wait a few seconds</h1>
-    <p id="message">
-        The server is currently booting up. The page will show once it's ready.
-    </p>
-    
-    <p>
-        Want to use a lightweight hibernator on your own server? Take a look at <a href="https://github.com/mubelotix/nginx-site-hibernator">our GitHub</a>.
-    </p>
+    <div class="container">
+        <div id="lottie-animation"></div>
+        <h1>Server Starting...</h1>
+        <p id="message">
+            The server is currently booting up. The page will reload automatically once it's ready.
+        </p>
+        <div class="progress-bar" id="progress-container" style="display: none;">
+            <div class="progress-fill" id="progress-fill"></div>
+        </div>
+        <div class="footer">
+            <p>
+                Powered by <a href="https://github.com/mubelotix/nginx-site-hibernator" target="_blank" rel="noopener noreferrer">nginx-site-hibernator</a>
+            </p>
+        </div>
+    </div>
     <script>
+        // Load Lottie animation
+        const animation = lottie.loadAnimation({
+            container: document.getElementById('lottie-animation'),
+            renderer: 'svg',
+            loop: true,
+            autoplay: true,
+            path: '/hibernator-landing/servers.json'
+        });
+
         let keep_alive = KEEP_ALIVE;
         let done_ms = DONE_MS;
         let duration_ms = DURATION_MS;
 
+        // Auto-reload logic
         setTimeout(() => {
             window.location.reload();
         }, Math.min(keep_alive * 1000, 1000));
 
+        // Progress and ETA display
         if (done_ms > 0 && duration_ms > 0) {
-            // Add some text to the message
-            let remaining_ms = duration_ms - done_ms;
-            let remaining = Math.ceil(remaining_ms / 1000);
+            const remaining_ms = duration_ms - done_ms;
+            const remaining = Math.ceil(remaining_ms / 1000);
+            const progress = (done_ms / duration_ms) * 100;
+
             if (remaining > 0) {
-                let message = document.getElementById('message');
-                message.innerHTML += ` It should be done by ${remaining} seconds.`;
+                // Update message
+                const message = document.getElementById('message');
+                message.innerHTML = `The server is currently booting up. Estimated time remaining: <strong>${remaining} second${remaining !== 1 ? 's' : ''}</strong>.`;
+
+                // Show and update progress bar
+                const progressContainer = document.getElementById('progress-container');
+                const progressFill = document.getElementById('progress-fill');
+                
+                progressContainer.style.display = 'block';
+                progressFill.style.width = `${progress}%`;
+
+                // Animate progress bar
+                let currentProgress = progress;
+                const interval = setInterval(() => {
+                    if (currentProgress < 98) {
+                        currentProgress += 0.5;
+                        progressFill.style.width = `${currentProgress}%`;
+                    } else {
+                        clearInterval(interval);
+                    }
+                }, 100);
             }
         }
     </script>
