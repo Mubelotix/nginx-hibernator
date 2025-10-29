@@ -46,7 +46,7 @@ Generate the following sample using this chatgpt prompt:
 Generate release notes with :
 
 > git --no-pager diff v0.3.0 v0.4.0 -- README.md
-> Generate documentation to include in release about changes in config.toml. Only one section named "Configuration changes". Only document real changes, not formatting or comment changes. Use markdown format.
+> Generate documentation to include in release about changes in config.toml. Only one section named "Configuration changes". Only document real changes, not formatting, comment, doc or example changes. Use markdown format.
 -->
 
 ```toml

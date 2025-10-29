@@ -1,10 +1,3 @@
-
-// name = "example" # The name of the nginx site
-// access_log = "/var/log/nginx/example.access.log" # The path to the access log
-// access_log_filter = "example.com" # Optional filter to match lines in the access log
-// service_name = "webserver" # The name of the service that runs the site
-// keep_alive = "5m" # Time to keep the site running after the last access
-
 use std::{fs::metadata, os::unix::fs::MetadataExt, path::Path};
 use log::*;
 use tokio::spawn;
