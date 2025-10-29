@@ -10,6 +10,15 @@ if ! command -v curl >/dev/null 2>&1; then
     exit 1
 fi
 
+# Run command with sudo only if not already running as root
+maybe_sudo() {
+    if [ "$(id -u)" -eq 0 ]; then
+        "$@"
+    else
+        sudo "$@"
+    fi
+}
+
 # This script uses the Rustup script as a library to detect the architecture of the system
 source_rustup_functions() {
     echo "[1/7] Downloading library"
@@ -65,17 +74,17 @@ case $? in
 esac
 
 echo "[5/7] Installing nginx-hibernator at /usr/local/bin/nginx-hibernator"
-sudo mv "/tmp/$filename" "/usr/local/bin/nginx-hibernator"
-chmod +x "/usr/local/bin/nginx-hibernator"
+maybe_sudo mv "/tmp/$filename" "/usr/local/bin/nginx-hibernator"
+maybe_sudo chmod +x "/usr/local/bin/nginx-hibernator"
 
 echo "[6/7] Installing nginx-hibernator frontend at /usr/share/nginx/html/nginx-hibernator-frontend"
-sudo unzip -o "/tmp/frontend.zip" -d "/usr/share/nginx/html/nginx-hibernator-frontend"
-sudo chown -R www-data:www-data "/usr/share/nginx/html/nginx-hibernator-frontend"
-sudo chmod -R 755 "/usr/share/nginx/html/nginx-hibernator-frontend"
+maybe_sudo unzip -o "/tmp/frontend.zip" -d "/usr/share/nginx/html/nginx-hibernator-frontend"
+maybe_sudo chown -R www-data:www-data "/usr/share/nginx/html/nginx-hibernator-frontend"
+maybe_sudo chmod -R 755 "/usr/share/nginx/html/nginx-hibernator-frontend"
 
 echo "[7/7] Installing nginx-hibernator default landing page at /usr/share/nginx/html/nginx-hibernator-landing"
-sudo unzip -o "/tmp/landing.zip" -d "/usr/share/nginx/html/nginx-hibernator-landing"
-sudo chown -R www-data:www-data "/usr/share/nginx/html/nginx-hibernator-landing"
-sudo chmod -R 755 "/usr/share/nginx/html/nginx-hibernator-landing"
+maybe_sudo unzip -o "/tmp/landing.zip" -d "/usr/share/nginx/html/nginx-hibernator-landing"
+maybe_sudo chown -R www-data:www-data "/usr/share/nginx/html/nginx-hibernator-landing"
+maybe_sudo chmod -R 755 "/usr/share/nginx/html/nginx-hibernator-landing"
 
 echo "${green}nginx-hibernator $version has been installed successfully!${normal}"
