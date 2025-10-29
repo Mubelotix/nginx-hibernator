@@ -49,7 +49,7 @@ const fetchStateHistory = async (before?: number, after?: number, updateUrl = tr
       throw new Error(`HTTP error! status: ${response.status}`)
     }
     const data = await response.json()
-    
+
     // Reverse to show newest first
     entries.value = data.reverse()
     
@@ -137,9 +137,9 @@ const getStateEmoji = (state: ServiceState) => {
     case 'up':
       return '✅'
     case 'down':
-      return '🔴'
+      return '💤'
     case 'starting':
-      return '🟡'
+      return '⚙️'
     default:
       return '❓'
   }
@@ -202,7 +202,7 @@ const formatDuration = (startTime: number, endTime: number) => {
               <TableCell v-if="!props.serviceName" class="text-sm">{{ entry.service }}</TableCell>
               <TableCell class="font-medium" :class="getStateClass(entry.state)">
                 <span class="state-badge">
-                  {{ getStateEmoji(entry.state) }} {{ entry.state.toUpperCase() }}
+                  {{ getStateEmoji(entry.state) }} {{ entry.state === 'down' ? 'HIBERNATING' : entry.state.toUpperCase() }}
                 </span>
               </TableCell>
             </TableRow>
@@ -367,11 +367,11 @@ const formatDuration = (startTime: number, endTime: number) => {
 }
 
 .state-down {
-  color: #dc2626;
+  color: #2563eb;
 }
 
 .state-down .state-badge {
-  background: #fee2e2;
+  background: #dbeafe;
 }
 
 .state-starting {

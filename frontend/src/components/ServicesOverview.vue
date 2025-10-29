@@ -51,9 +51,9 @@ const getStateIcon = (state: string) => {
     case 'up':
       return '✓'
     case 'down':
-      return '○'
+      return '💤'
     case 'starting':
-      return '↻'
+      return '⚙️'
     case 'unknown':
     default:
       return '?'
@@ -65,7 +65,7 @@ const getStateLabel = (state: string) => {
     case 'up':
       return 'Up'
     case 'down':
-      return 'Down'
+      return 'Hibernating'
     case 'starting':
       return 'Starting'
     case 'unknown':
@@ -160,8 +160,8 @@ onUnmounted(() => {
 }
 
 .service-card.state-down {
-  border-color: #6b7280;
-  background: linear-gradient(to bottom, #ffffff 0%, #f9fafb 100%);
+  border-color: #3b82f6;
+  background: linear-gradient(to bottom, #ffffff 0%, #eff6ff 100%);
 }
 
 .service-card.state-starting {
@@ -207,8 +207,8 @@ onUnmounted(() => {
 }
 
 .state-down .service-state {
-  background: #e5e7eb;
-  color: #374151;
+  background: #dbeafe;
+  color: #1e40af;
 }
 
 .state-starting .service-state {
