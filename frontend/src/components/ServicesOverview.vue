@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import type { ServiceInfo } from '@/types/api'
 import { formatTime } from '@/lib/time'
 
@@ -74,6 +80,20 @@ const getStateLabel = (state: string) => {
   }
 }
 
+const getStateTooltip = (state: string) => {
+  switch (state) {
+    case 'up':
+      return 'Service is running and consuming resources'
+    case 'down':
+      return 'Service is hibernating and will start automatically upon request'
+    case 'starting':
+      return 'Service is starting up - users are waiting at the landing page'
+    case 'unknown':
+    default:
+      return 'Unknown state'
+  }
+}
+
 onMounted(() => {
   fetchServices()
   // Refresh every 5 seconds
@@ -102,10 +122,19 @@ onUnmounted(() => {
       >
         <div class="service-header">
           <div class="service-name">{{ service.name }}</div>
-          <div class="service-state">
-            <span class="state-icon">{{ getStateIcon(service.state) }}</span>
-            <span class="state-label">{{ getStateLabel(service.state) }}</span>
-          </div>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger as-child>
+                <div class="service-state">
+                  <span class="state-icon">{{ getStateIcon(service.state) }}</span>
+                  <span class="state-label">{{ getStateLabel(service.state) }}</span>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>{{ getStateTooltip(service.state) }}</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
         <div class="service-footer">
           <span class="last-changed">{{ formatTime(service.last_changed) }}</span>

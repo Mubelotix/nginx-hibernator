@@ -9,6 +9,12 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import type { StateHistoryEntry, ServiceState } from '@/types/api'
 
 const props = defineProps<{
@@ -145,6 +151,19 @@ const getStateEmoji = (state: ServiceState) => {
   }
 }
 
+const getStateTooltip = (state: ServiceState) => {
+  switch (state) {
+    case 'up':
+      return 'Service is running and consuming resources. It will be hibernated after a period of inactivity.'
+    case 'down':
+      return 'Service is down but will start automatically upon request. This keeps the machine completely idle.'
+    case 'starting':
+      return 'Users are waiting for the service to start at the landing page'
+    default:
+      return 'Unknown state'
+  }
+}
+
 const formatTime = (timestamp: number) => {
   const date = new Date(timestamp * 1000)
   return date.toLocaleString()
@@ -201,9 +220,18 @@ const formatDuration = (startTime: number, endTime: number) => {
               <TableCell class="font-mono text-sm">{{ formatDuration(entry.start_time, entry.end_time) }}</TableCell>
               <TableCell v-if="!props.serviceName" class="text-sm">{{ entry.service }}</TableCell>
               <TableCell class="font-medium" :class="getStateClass(entry.state)">
-                <span class="state-badge">
-                  {{ getStateEmoji(entry.state) }} {{ entry.state === 'down' ? 'HIBERNATING' : entry.state.toUpperCase() }}
-                </span>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger as-child>
+                      <span class="state-badge">
+                        {{ getStateEmoji(entry.state) }} {{ entry.state === 'down' ? 'HIBERNATING' : entry.state.toUpperCase() }}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>{{ getStateTooltip(entry.state) }}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </TableCell>
             </TableRow>
           </TableBody>
