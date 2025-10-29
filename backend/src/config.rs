@@ -374,7 +374,7 @@ pub struct TopLevelConfig {
 
     /// Path to the landing page folder containing index.html and assets.
     /// 
-    /// Defaults to `./landing`
+    /// Defaults to `/usr/share/nginx/html/nginx-hibernator-landing`
     #[serde(default)]
     pub landing_folder: Option<String>,
 
@@ -404,7 +404,7 @@ impl TopLevelConfig {
     pub fn landing_folder(&self) -> &str {
         match &self.landing_folder {
             Some(p) => p,
-            None => "./landing"
+            None => "/usr/share/nginx/html/nginx-hibernator-landing"
         }
     }
 }
