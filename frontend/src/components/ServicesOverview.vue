@@ -9,6 +9,7 @@ import {
 } from '@/components/ui/tooltip'
 import type { ServiceInfo } from '@/types/api'
 import { formatTime } from '@/lib/time'
+import { formatServiceName } from '@/lib/utils'
 import { apiFetch } from '@/lib/api'
 
 const router = useRouter()
@@ -36,7 +37,7 @@ const fetchServices = async () => {
 }
 
 const navigateToService = (serviceName: string) => {
-  router.push(`/services/${serviceName}`)
+  router.push(`/services/${serviceName}/dashboard`)
 }
 
 const getStateClass = (state: string) => {
@@ -122,7 +123,7 @@ onUnmounted(() => {
         @click="navigateToService(service.name)"
       >
         <div class="service-header">
-          <div class="service-name">{{ service.name }}</div>
+          <div class="service-name">{{ formatServiceName(service.name) }}</div>
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger as-child>
