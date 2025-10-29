@@ -6,6 +6,36 @@ use crate::{controller::{SiteState, SITE_CONTROLLERS}, database::DATABASE, serve
 use log::*;
 use std::collections::HashMap;
 
+/// Helper function to send a JSON response
+async fn send_json_response(mut stream: TcpStream, data: &impl Serialize) -> Result<(), ()> {
+    let content = match serde_json::to_string(data) {
+        Ok(content) => content,
+        Err(e) => {
+            error!("Failed to serialize response: {}", e);
+            send_error_response(stream, 500, "Failed to serialize response").await;
+            return Err(());
+        }
+    };
+
+    let status_line = "HTTP/1.1 200 OK";
+    let length = content.len();
+    let response = format!("{status_line}\r\nContent-Length: {length}\r\nContent-Type: application/json\r\n\r\n{content}");
+    let _ = stream.write_all(response.as_bytes()).await;
+    Ok(())
+}
+
+/// Helper function to send an error response
+async fn send_error_response(mut stream: TcpStream, status_code: u16, message: &str) {
+    let status_line = match status_code {
+        404 => "HTTP/1.1 404 Not Found",
+        500 => "HTTP/1.1 500 Internal Server Error",
+        _ => "HTTP/1.1 500 Internal Server Error",
+    };
+    let length = message.len();
+    let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{message}");
+    let _ = stream.write_all(response.as_bytes()).await;
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct HistoryEntry {
     pub timestamp: u64,
@@ -40,7 +70,7 @@ pub struct ServiceMetrics {
     pub start_duration_estimate_ms: Option<u64>, // From get_start_duration_estimate
 }
 
-pub async fn handle_services_request(mut stream: TcpStream) {
+pub async fn handle_services_request(stream: TcpStream) {
     // SAFETY: This is safe because SITE_CONTROLLERS is only mutated once during initialization
     #[allow(static_mut_refs)]
     let services: Vec<ServiceInfo> = unsafe {
@@ -60,15 +90,10 @@ pub async fn handle_services_request(mut stream: TcpStream) {
         }).collect()
     };
 
-    let content = serde_json::to_string(&services).unwrap(); // FIXME
-
-    let status_line = "HTTP/1.1 200 OK";
-    let length = content.len();
-    let response = format!("{status_line}\r\nContent-Length: {length}\r\nContent-Type: application/json\r\n\r\n{content}");
-    let _ = stream.write_all(response.as_bytes()).await;
+    let _ = send_json_response(stream, &services).await;
 }
 
-pub async fn handle_service_config_request(mut stream: TcpStream, service_name: &str) {
+pub async fn handle_service_config_request(stream: TcpStream, service_name: &str) {
     trace!("Handling service config request for: {}", service_name);
 
     // SAFETY: This is safe because SITE_CONTROLLERS is only mutated once during initialization
@@ -80,24 +105,15 @@ pub async fn handle_service_config_request(mut stream: TcpStream, service_name: 
     let controller = match controller {
         Some(controller) => controller,
         None => {
-            let status_line = "HTTP/1.1 404 Not Found";
-            let content = format!("Service '{}' not found", service_name);
-            let length = content.len();
-            let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
-            let _ = stream.write_all(response.as_bytes()).await;
+            send_error_response(stream, 404, &format!("Service '{}' not found", service_name)).await;
             return;
         }
     };
 
-    let content = serde_json::to_string(&controller.config).unwrap(); // FIXME
-
-    let status_line = "HTTP/1.1 200 OK";
-    let length = content.len();
-    let response = format!("{status_line}\r\nContent-Length: {length}\r\nContent-Type: application/json\r\n\r\n{content}");
-    let _ = stream.write_all(response.as_bytes()).await;
+    let _ = send_json_response(stream, &controller.config).await;
 }
 
-pub async fn handle_history_request(mut stream: TcpStream, url: &Url) {
+pub async fn handle_history_request(stream: TcpStream, url: &Url) {
     trace!("Handling history request: {}", url);
 
     let query_pairs: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
@@ -106,45 +122,54 @@ pub async fn handle_history_request(mut stream: TcpStream, url: &Url) {
     let after = query_pairs.get("after").and_then(|a| a.parse::<u64>().ok());
     let min_results = query_pairs.get("minResults").and_then(|m| m.parse::<usize>().ok()).unwrap_or(10);
 
-    let history = DATABASE.get_connection_history(
+    let history = match DATABASE.get_connection_history(
         service,
         before.or(Some(u64::MAX)),
         after,
         min_results
-    ).unwrap(); // FIXME
+    ) {
+        Ok(history) => history,
+        Err(e) => {
+            error!("Failed to get connection history: {}", e);
+            send_error_response(stream, 500, &format!("Failed to get connection history: {}", e)).await;
+            return;
+        }
+    };
 
     let entries = history.into_iter().map(|(timestamp, metadata)| HistoryEntry {
         timestamp,
         metadata,
     }).collect::<Vec<_>>();
 
-    let content = serde_json::to_string(&entries).unwrap(); // FIXME
-
-    let status_line = "HTTP/1.1 200 OK";
-    let length = content.len();
-    let response = format!("{status_line}\r\nContent-Length: {length}\r\nContent-Type: application/json\r\n\r\n{content}");
-    let _ = stream.write_all(response.as_bytes()).await;
+    let _ = send_json_response(stream, &entries).await;
 }
 
-pub async fn handle_state_history_request(mut stream: TcpStream, url: &Url) {
+pub async fn handle_state_history_request(stream: TcpStream, url: &Url) {
     trace!("Handling state history request: {}", url);
 
     let query_pairs: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
     let service = query_pairs.get("service").map(|s| s.as_str());
-    let before = query_pairs.get("before").and_then(|b| b.parse::<i64>().ok()).map(|ts| DateTime::from_timestamp(ts, 0).unwrap());
-    let after = query_pairs.get("after").and_then(|a| a.parse::<i64>().ok()).map(|ts| DateTime::from_timestamp(ts, 0).unwrap());
+    let before = query_pairs.get("before").and_then(|b| b.parse::<i64>().ok()).and_then(|ts| DateTime::from_timestamp(ts, 0));
+    let after = query_pairs.get("after").and_then(|a| a.parse::<i64>().ok()).and_then(|ts| DateTime::from_timestamp(ts, 0));
     let min_results = query_pairs.get("minResults").and_then(|m| m.parse::<usize>().ok()).unwrap_or(10);
 
     let mut all_ranges = Vec::new();
 
     if let Some(svc) = service {
         // Query specific service
-        let ranges = DATABASE.get_state_history(
+        let ranges = match DATABASE.get_state_history(
             svc,
-            before.or(Some(DateTime::from_timestamp(i64::MAX / 1_000_000_000, 0).unwrap())),
+            before.or_else(|| DateTime::from_timestamp(i64::MAX / 1_000_000_000, 0)),
             after,
             min_results
-        ).unwrap(); // FIXME
+        ) {
+            Ok(ranges) => ranges,
+            Err(e) => {
+                error!("Failed to get state history: {}", e);
+                send_error_response(stream, 500, &format!("Failed to get state history: {}", e)).await;
+                return;
+            }
+        };
         
         all_ranges = ranges;
     } else {
@@ -156,12 +181,18 @@ pub async fn handle_state_history_request(mut stream: TcpStream, url: &Url) {
         };
 
         for svc in services {
-            let ranges = DATABASE.get_state_history(
+            let ranges = match DATABASE.get_state_history(
                 svc,
-                before.or(Some(DateTime::from_timestamp(i64::MAX / 1_000_000_000, 0).unwrap())),
+                before.or_else(|| DateTime::from_timestamp(i64::MAX / 1_000_000_000, 0)),
                 after,
                 min_results
-            ).unwrap_or_default(); // FIXME: Better error handling
+            ) {
+                Ok(ranges) => ranges,
+                Err(e) => {
+                    error!("Failed to get state history for service {}: {}", svc, e);
+                    Vec::new()
+                }
+            };
             
             all_ranges.extend(ranges);
         }
@@ -189,15 +220,10 @@ pub async fn handle_state_history_request(mut stream: TcpStream, url: &Url) {
         }
     }).collect();
 
-    let content = serde_json::to_string(&entries).unwrap(); // FIXME
-
-    let status_line = "HTTP/1.1 200 OK";
-    let length = content.len();
-    let response = format!("{status_line}\r\nContent-Length: {length}\r\nContent-Type: application/json\r\n\r\n{content}");
-    let _ = stream.write_all(response.as_bytes()).await;
+    let _ = send_json_response(stream, &entries).await;
 }
 
-pub async fn handle_metrics_request(mut stream: TcpStream, service_name: &str, url: &Url) {
+pub async fn handle_metrics_request(stream: TcpStream, service_name: &str, url: &Url) {
     trace!("Handling metrics request for: {}", service_name);
 
     // Parse the 'seconds' query parameter (default to 86400 = 24 hours)
@@ -216,11 +242,7 @@ pub async fn handle_metrics_request(mut stream: TcpStream, service_name: &str, u
     let controller = match controller {
         Some(controller) => controller,
         None => {
-            let status_line = "HTTP/1.1 404 Not Found";
-            let content = format!("Service '{}' not found", service_name);
-            let length = content.len();
-            let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
-            let _ = stream.write_all(response.as_bytes()).await;
+            send_error_response(stream, 404, &format!("Service '{}' not found", service_name)).await;
             return;
         }
     };
@@ -233,11 +255,7 @@ pub async fn handle_metrics_request(mut stream: TcpStream, service_name: &str, u
         Ok(history) => history,
         Err(e) => {
             error!("Error fetching state history: {}", e);
-            let status_line = "HTTP/1.1 500 Internal Server Error";
-            let content = format!("Error fetching metrics: {}", e);
-            let length = content.len();
-            let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{content}");
-            let _ = stream.write_all(response.as_bytes()).await;
+            send_error_response(stream, 500, &format!("Error fetching metrics: {}", e)).await;
             return;
         }
     };
@@ -324,10 +342,5 @@ pub async fn handle_metrics_request(mut stream: TcpStream, service_name: &str, u
         start_duration_estimate_ms,
     };
 
-    let content = serde_json::to_string(&metrics).unwrap(); // FIXME
-
-    let status_line = "HTTP/1.1 200 OK";
-    let length = content.len();
-    let response = format!("{status_line}\r\nContent-Length: {length}\r\nContent-Type: application/json\r\n\r\n{content}");
-    let _ = stream.write_all(response.as_bytes()).await;
+    let _ = send_json_response(stream, &metrics).await;
 }
