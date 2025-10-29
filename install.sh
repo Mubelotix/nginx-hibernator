@@ -4,6 +4,12 @@ green='\033[0;32m'
 red='\033[1;31m'
 normal='\033[0m'
 
+# Check if curl is installed
+if ! command -v curl >/dev/null 2>&1; then
+    echo "${red}Error: curl is not installed. Please install curl and try again.${normal}"
+    exit 1
+fi
+
 # This script uses the Rustup script as a library to detect the architecture of the system
 source_rustup_functions() {
     echo "[1/7] Downloading library"
