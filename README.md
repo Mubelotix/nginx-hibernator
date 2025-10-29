@@ -45,121 +45,132 @@ Generate the following sample using this chatgpt prompt:
 -->
 
 ```toml
-##############################################
-# Hibernator Configuration File
-# This file controls the global hibernator behavior and per-site settings.
-# All durations support suffixes: s (seconds), m (minutes), h (hours), d or j (days)
-##############################################
+#########################################
+# HIBERNATOR GLOBAL CONFIGURATION FILE  #
+#########################################
+# This file configures both the hibernator service itself
+# and the individual sites it manages.
+# Each site can override most of the global settings.
 
+#########################################
+# [GLOBAL SETTINGS]
+#########################################
+# These values apply to the hibernator process as a whole.
 
-##############################################
-# Top-level Configuration
-##############################################
-
-# The port that the hibernator listens on.
-# This port should **never** be exposed to the internet.
-# Defaults to 7878.
+# The port the hibernator listens to.
+# This port should NEVER be exposed to the internet.
+# Defaults to 7878
 hibernator_port = 7878
 
-# Path to the database file where runtime data is stored.
-# Defaults to "./data.mdb".
+# Path to the embedded database.
+# Defaults to "./data.mdb"
 database_path = "./data.mdb"
 
+# Path to the folder containing the default landing page (index.html and assets).
+# Defaults to "./landing"
+landing_folder = "./landing"
 
+# SHA-256 hash of the API key used for hibernator API authentication.
+# If not set, API authentication is disabled.
+# Generate with:
+#   echo -n "your-api-key" | sha256sum
+api_key_sha256 = "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8"  # example for "password"
 
-##############################################
-# Per-site Configuration
-##############################################
+#########################################
+# [SITE CONFIGURATIONS]
+#########################################
+# Each [[sites]] section describes one managed site.
+# You can define multiple sites by repeating [[sites]] blocks.
 
 [[sites]]
-# The unique name of the site.
+# Unique name for the site
 name = "example-site"
 
-# Path to nginx "available" configuration file.
-# Default: /etc/nginx/sites-available/{name}
-# nginx_available_config = "/etc/nginx/sites-available/example-site"
+# Optional: Path to the nginx available config file.
+# Defaults to /etc/nginx/sites-available/{name}
+nginx_available_config = "/etc/nginx/sites-available/example-site"
 
-# Path to nginx "enabled" configuration file.
-# Default: /etc/nginx/sites-enabled/{name}
-# nginx_enabled_config = "/etc/nginx/sites-enabled/example-site"
+# Optional: Path to the nginx enabled config file.
+# Defaults to /etc/nginx/sites-enabled/{name}
+nginx_enabled_config = "/etc/nginx/sites-enabled/example-site"
 
-# Path to nginx hibernator configuration.
-# Default: /etc/nginx/sites-available/nginx-hibernator
-# nginx_hibernator_config = "/etc/nginx/sites-available/nginx-hibernator"
+# Optional: Path to the nginx hibernator config file.
+# Defaults to /etc/nginx/sites-available/nginx-hibernator
+nginx_hibernator_config = "/etc/nginx/sites-available/nginx-hibernator"
 
-# Number of recent start durations to store for ETA computation.
+# Number of start durations stored (used for ETA calculations)
 # Default: 100
 eta_sample_size = 100
 
-# Percentile used to compute ETA from samples.
-# Should be between 0 and 100. Default: 95
+# Percentile used for ETA computation (0–100)
+# Default: 95
 eta_percentile = 95
 
-# Port that the backend service listens to.
-# Used to determine if the service is up.
+# The TCP port the service listens to (used to detect if it's up)
 port = 8080
 
 # Path to the nginx access log file.
-# Must be the same file where nginx logs requests.
+# The nginx config must log to this file.
 access_log = "/var/log/nginx/example-site.access.log"
 
-# Optional substring filter for access log entries.
-# Only lines containing this string will be considered.
-# access_log_filter = "GET /api/"
+# Optional string to filter log lines.
+# Only matching lines are considered for activity tracking.
+access_log_filter = "GET /"
 
-# Systemd service name for this site.
-# Commands like `systemctl start <service_name>` will be executed.
+# The name of the systemd service used to start/stop this site
 service_name = "example-site.service"
 
 # Hostnames that this site responds to.
-# Used to decide which service to start when requests come in.
+# Used by hibernator to determine which site to start on incoming requests.
 hosts = ["example.com", "www.example.com"]
 
-# Proxy behavior mode. Options:
-#   - "always"     → always proxy requests
-#   - "when_ready" → proxy only when upstream is ready
-#   - "never"      → disable proxy
-# Default: "always"
+# Proxy behavior for requests:
+#   - "always"     → proxy all requests
+#   - "when_ready" → proxy only when service is already up
+#   - "never"      → disable proxy feature
 proxy_mode = "always"
 
-# Proxy mode for browser requests.
-# Default: "when_ready"
+# Proxy mode for browser-issued requests (same options as above)
 browser_proxy_mode = "when_ready"
 
-# Maximum time to wait for the backend proxy to respond (milliseconds).
+# Maximum time (ms) to wait for proxy to succeed
 # Default: 28000
 proxy_timeout_ms = 28000
 
-# Interval to check if proxy is up (milliseconds).
+# Interval (ms) between checks to see if proxy is ready
 # Default: 500
 proxy_check_interval_ms = 500
 
-# List of glob patterns for paths that should NOT count as activity.
-# Requests to these paths do not reset the keep-alive timer.
-# Example: ["/static/*", "/health", "/favicon.ico"]
-# path_blacklist = ["/static/*", "/health"]
+# Optional: Glob patterns for paths that should NOT count as activity.
+# Requests to these paths will NOT wake the service.
+# Example: static assets, health checks, etc.
+# Patterns follow standard glob syntax.
+path_blacklist = ["*/static/*", "*/healthcheck"]
 
-# List of IPs or prefixes that should NOT count as activity.
-# Example: ["127.0.0.1", "192.168.0.0/16"]
-# ip_blacklist = ["127.0.0.1"]
+# Optional: IP addresses or prefixes that should NOT count as activity.
+# Requests from these IPs will NOT wake the service.
+ip_blacklist = ["192.168.1.0/24", "10.0.0.0/8"]
 
-# List of IPs or prefixes allowed to wake up the service.
-# If set, requests from other IPs are ignored.
-# Example: ["203.0.113.0/24"]
-# ip_whitelist = ["203.0.113.0/24"]
+# Optional: IP addresses or prefixes that ARE allowed to wake the service.
+# If set, requests from other IPs will be ignored.
+ip_whitelist = ["203.0.113.0/24"]
 
-# How long to keep the service running after last request.
-# Accepts units: s (seconds), m (minutes), h (hours), d (days)
-# Example: "10m" means 10 minutes.
-keep_alive = "10m"
+# How long to keep the service running after last request (in seconds or with suffixes)
+# Supports suffixes: s=seconds, m=minutes, h=hours, d=days
+# Example: "300s" or "5m"
+keep_alive = "5m"
 
-# Maximum time to wait for service startup (milliseconds).
+# Timeout (ms) for waiting for service startup before giving up
 # Default: 300000 (5 minutes)
 start_timeout_ms = 300000
 
-# Interval to check if the service has started (milliseconds).
+# Interval (ms) to check whether the service has started
 # Default: 100
 start_check_interval_ms = 100
+
+# Optional: Site-specific landing page folder.
+# If not set, uses the global landing_folder.
+landing_folder = "/var/www/example-landing"
 ```
 
 ### Dashboard Setup
