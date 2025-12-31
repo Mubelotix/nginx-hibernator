@@ -35,7 +35,7 @@ impl Database {
 
         let env = unsafe {
             EnvOpenOptions::new()
-                .map_size(4096 * 4096) // 16MiB
+                .map_size(10 * 4096 * 4096) // 160MiB
                 .max_dbs(16)
                 .open(path)
                 .expect("couldn't open database")
