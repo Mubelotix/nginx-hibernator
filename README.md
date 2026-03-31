@@ -353,10 +353,7 @@ http {
 
 Process-level legacy settings like `hibernator_port`, `database_path`, `api_key_sha256`, and deployment path fields are intentionally not planned as nginx directives.
 
-Current implementation is a transitional subset:
-
-- `random_gate on|off`
-- `random_gate_landing_dir /path/to/landing`
+Current implementation uses the `hibernator*` directives shown in the sample config above.
 
 ### Build and run helpers
 

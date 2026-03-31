@@ -1,4 +1,3 @@
-use core::ffi::{c_char, c_void};
 use core::ptr;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -6,13 +5,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ngx::core::{Buffer, Status};
 use ngx::ffi::{
-    NGX_CONF_TAKE1, NGX_HTTP_LOC_CONF, NGX_HTTP_LOC_CONF_OFFSET, NGX_HTTP_MODULE, NGX_LOG_EMERG,
-    ngx_array_push, ngx_command_t, ngx_conf_t, ngx_http_conf_ctx_t, ngx_http_core_main_conf_t,
+    NGX_HTTP_MODULE, NGX_LOG_EMERG,
+    ngx_array_push, ngx_conf_t, ngx_http_conf_ctx_t, ngx_http_core_main_conf_t,
     ngx_http_core_module, ngx_http_handler_pt, ngx_http_module_t, ngx_http_phases_NGX_HTTP_ACCESS_PHASE,
-    ngx_http_request_t, ngx_int_t, ngx_module_t, ngx_str_t, ngx_uint_t, ngx_chain_t,
+    ngx_http_request_t, ngx_int_t, ngx_module_t, ngx_chain_t,
 };
-use ngx::http::{self, HttpModule, HttpModuleLocationConf, MergeConfigError, Request};
-use ngx::{ngx_conf_log_error, ngx_log_debug_http, ngx_string};
+use ngx::http::{self, HttpModule, HttpModuleLocationConf, Request};
+use ngx::{ngx_conf_log_error, ngx_log_debug_http};
+
+mod config;
+use config::ModuleConfig;
 
 const DEFAULT_LANDING_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Service starting</title><style>body{font-family:system-ui,Segoe UI,sans-serif;margin:40px;color:#222}main{max-width:680px}h1{font-size:1.6rem;margin-bottom:.4rem}p{line-height:1.45}</style></head><body><main><h1>Service is waking up</h1><p>The upstream service is currently hibernated and is being started.</p><p>Please refresh in a few seconds.</p></main></body></html>";
 const LANDING_PREFIX: &str = "/hibernator-landing/";
@@ -33,35 +35,9 @@ impl http::HttpModule for Module {
     }
 }
 
-#[derive(Debug, Default)]
-struct ModuleConfig {
-    enable: bool,
-    landing_dir: Option<String>,
-}
-
 unsafe impl HttpModuleLocationConf for Module {
     type LocationConf = ModuleConfig;
 }
-
-static mut NGX_HTTP_RANDOM_GATE_COMMANDS: [ngx_command_t; 3] = [
-    ngx_command_t {
-        name: ngx_string!("random_gate"),
-        type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
-        set: Some(ngx_http_random_gate_commands_set_enable),
-        conf: NGX_HTTP_LOC_CONF_OFFSET,
-        offset: 0,
-        post: ptr::null_mut(),
-    },
-    ngx_command_t {
-        name: ngx_string!("random_gate_landing_dir"),
-        type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
-        set: Some(ngx_http_random_gate_commands_set_landing_dir),
-        conf: NGX_HTTP_LOC_CONF_OFFSET,
-        offset: 0,
-        post: ptr::null_mut(),
-    },
-    ngx_command_t::empty(),
-];
 
 static NGX_HTTP_RANDOM_GATE_MODULE_CTX: ngx_http_module_t = ngx_http_module_t {
     preconfiguration: Some(Module::preconfiguration),
@@ -82,22 +58,10 @@ ngx::ngx_modules!(ngx_http_random_gate_module);
 #[cfg_attr(not(feature = "export-modules"), unsafe(no_mangle))]
 pub static mut ngx_http_random_gate_module: ngx_module_t = ngx_module_t {
     ctx: &raw const NGX_HTTP_RANDOM_GATE_MODULE_CTX as _,
-    commands: unsafe { &raw mut NGX_HTTP_RANDOM_GATE_COMMANDS[0] },
+    commands: unsafe { &raw mut config::NGX_HTTP_HIBERNATOR_COMMANDS[0] },
     type_: NGX_HTTP_MODULE as _,
     ..ngx_module_t::default()
 };
-
-impl http::Merge for ModuleConfig {
-    fn merge(&mut self, prev: &ModuleConfig) -> Result<(), MergeConfigError> {
-        if prev.enable {
-            self.enable = true;
-        }
-        if self.landing_dir.is_none() {
-            self.landing_dir = prev.landing_dir.clone();
-        }
-        Ok(())
-    }
-}
 
 struct RandomGateRequestHandler;
 
@@ -328,80 +292,4 @@ fn should_fail_now() -> bool {
         .map_or(0_u64, |d| d.as_secs());
     let window = (now_secs / 10) % 2;
     window == 0
-}
-
-extern "C" fn ngx_http_random_gate_commands_set_enable(
-    cf: *mut ngx_conf_t,
-    _cmd: *mut ngx_command_t,
-    conf: *mut c_void,
-) -> *mut c_char {
-    unsafe {
-        let conf = &mut *(conf as *mut ModuleConfig);
-        let args: &[ngx_str_t] = (*(*cf).args).as_slice();
-
-        let val = match args[1].to_str() {
-            Ok(s) => s,
-            Err(_) => {
-                ngx_conf_log_error!(
-                    NGX_LOG_EMERG,
-                    cf,
-                    "`random_gate` argument is not utf-8 encoded"
-                );
-                return ngx::core::NGX_CONF_ERROR;
-            }
-        };
-
-        conf.enable = false;
-
-        if val.len() == 2 && val.eq_ignore_ascii_case("on") {
-            conf.enable = true;
-        } else if val.len() == 3 && val.eq_ignore_ascii_case("off") {
-            conf.enable = false;
-        } else {
-            ngx_conf_log_error!(
-                NGX_LOG_EMERG,
-                cf,
-                "invalid value for `random_gate`: use `on` or `off`"
-            );
-            return ngx::core::NGX_CONF_ERROR;
-        }
-    }
-
-    ngx::core::NGX_CONF_OK
-}
-
-extern "C" fn ngx_http_random_gate_commands_set_landing_dir(
-    cf: *mut ngx_conf_t,
-    _cmd: *mut ngx_command_t,
-    conf: *mut c_void,
-) -> *mut c_char {
-    unsafe {
-        let conf = &mut *(conf as *mut ModuleConfig);
-        let args: &[ngx_str_t] = (*(*cf).args).as_slice();
-
-        let val = match args[1].to_str() {
-            Ok(s) => s,
-            Err(_) => {
-                ngx_conf_log_error!(
-                    NGX_LOG_EMERG,
-                    cf,
-                    "`random_gate_landing_dir` argument is not utf-8 encoded"
-                );
-                return ngx::core::NGX_CONF_ERROR;
-            }
-        };
-
-        if val.is_empty() {
-            ngx_conf_log_error!(
-                NGX_LOG_EMERG,
-                cf,
-                "invalid value for `random_gate_landing_dir`: path cannot be empty"
-            );
-            return ngx::core::NGX_CONF_ERROR;
-        }
-
-        conf.landing_dir = Some(val.to_owned());
-    }
-
-    ngx::core::NGX_CONF_OK
 }

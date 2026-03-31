@@ -69,7 +69,7 @@ http {
         server_name localhost;
 
         location / {
-            random_gate on;
+          hibernator on;
             proxy_pass http://backend;
         }
     }

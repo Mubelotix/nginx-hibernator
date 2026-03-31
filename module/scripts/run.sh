@@ -86,8 +86,8 @@ http {
         server_name localhost;
 
         location / {
-            random_gate on;
-          random_gate_landing_dir $LANDING_DIR;
+          hibernator on;
+          hibernator_landing_dir $LANDING_DIR;
             proxy_pass http://backend;
         }
     }
