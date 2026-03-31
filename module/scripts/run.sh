@@ -87,6 +87,7 @@ http {
 
         location / {
           hibernator on;
+            hibernator_target_port $BACKEND_PORT;
           hibernator_landing_dir $LANDING_DIR;
             proxy_pass http://backend;
         }

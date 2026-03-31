@@ -1,7 +1,6 @@
 use core::ptr;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use ngx::core::{Buffer, Status};
 use ngx::ffi::{
@@ -14,6 +13,7 @@ use ngx::http::{self, HttpModule, HttpModuleLocationConf, Request};
 use ngx::{ngx_conf_log_error, ngx_log_debug_http};
 
 mod config;
+mod health;
 use config::ModuleConfig;
 
 const DEFAULT_LANDING_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Service starting</title><style>body{font-family:system-ui,Segoe UI,sans-serif;margin:40px;color:#222}main{max-width:680px}h1{font-size:1.6rem;margin-bottom:.4rem}p{line-height:1.45}</style></head><body><main><h1>Service is waking up</h1><p>The upstream service is currently hibernated and is being started.</p><p>Please refresh in a few seconds.</p></main></body></html>";
@@ -81,10 +81,15 @@ impl RandomGateRequestHandler {
             }
         }
 
-        let fail = should_fail_now();
-        ngx_log_debug_http!(request, "random_gate enabled=1 fail_window={}", fail);
+        let Some(target_port) = conf.target_port else {
+            ngx_log_debug_http!(request, "hibernator enabled=1 missing target_port, serving landing");
+            return serve_landing_page(request, conf.landing_dir.as_deref());
+        };
 
-        if fail {
+        let is_up = health::is_service_up(target_port);
+        ngx_log_debug_http!(request, "hibernator enabled=1 target_port={} up={}", target_port, is_up);
+
+        if !is_up {
             serve_landing_page(request, conf.landing_dir.as_deref())
         } else {
             Status::NGX_DECLINED
@@ -284,12 +289,4 @@ unsafe fn register_access_handler(cf: *mut ngx_conf_t) -> Result<(), ()> {
         *h = Some(random_gate_access_handler);
     }
     Ok(())
-}
-
-fn should_fail_now() -> bool {
-    let now_secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0_u64, |d| d.as_secs());
-    let window = (now_secs / 10) % 2;
-    window == 0
 }

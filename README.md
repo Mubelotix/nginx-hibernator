@@ -316,6 +316,9 @@ http {
       # Required when service control is enabled.
       hibernator_service_name simple_python_http;
 
+      # TCP port of the upstream app used by the health check.
+      hibernator_target_port 18081;
+
       # Keep backend alive after the last qualifying request.
       hibernator_keep_alive 5m;
 

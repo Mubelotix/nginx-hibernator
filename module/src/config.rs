@@ -24,6 +24,7 @@ impl Default for ProxyMode {
 pub struct ModuleConfig {
     pub enable: bool,
     pub service_name: Option<String>,
+    pub target_port: Option<u16>,
     pub keep_alive_secs: u64,
     pub start_timeout_ms: u64,
     pub start_check_interval_ms: u64,
@@ -32,8 +33,6 @@ pub struct ModuleConfig {
     pub proxy_timeout_ms: u64,
     pub proxy_check_interval_ms: u64,
     pub landing_dir: Option<String>,
-    pub eta_sample_size: usize,
-    pub eta_percentile: usize,
 }
 
 impl Default for ModuleConfig {
@@ -41,6 +40,7 @@ impl Default for ModuleConfig {
         Self {
             enable: false,
             service_name: None,
+            target_port: None,
             keep_alive_secs: 5 * 60,
             start_timeout_ms: 5 * 60 * 1000,
             start_check_interval_ms: 100,
@@ -49,8 +49,6 @@ impl Default for ModuleConfig {
             proxy_timeout_ms: 28_000,
             proxy_check_interval_ms: 500,
             landing_dir: None,
-            eta_sample_size: 100,
-            eta_percentile: 95,
         }
     }
 }
@@ -65,6 +63,9 @@ impl http::Merge for ModuleConfig {
 
         if self.service_name.is_none() {
             self.service_name = prev.service_name.clone();
+        }
+        if self.target_port.is_none() {
+            self.target_port = prev.target_port;
         }
 
         if self.keep_alive_secs == defaults.keep_alive_secs {
@@ -91,18 +92,12 @@ impl http::Merge for ModuleConfig {
         if self.landing_dir.is_none() {
             self.landing_dir = prev.landing_dir.clone();
         }
-        if self.eta_sample_size == defaults.eta_sample_size {
-            self.eta_sample_size = prev.eta_sample_size;
-        }
-        if self.eta_percentile == defaults.eta_percentile {
-            self.eta_percentile = prev.eta_percentile;
-        }
 
         Ok(())
     }
 }
 
-pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 13] = [
+pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 12] = [
     ngx_command_t {
         name: ngx_string!("hibernator"),
         type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
@@ -115,6 +110,14 @@ pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 13] = [
         name: ngx_string!("hibernator_service_name"),
         type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
         set: Some(set_service_name),
+        conf: NGX_HTTP_LOC_CONF_OFFSET,
+        offset: 0,
+        post: core::ptr::null_mut(),
+    },
+    ngx_command_t {
+        name: ngx_string!("hibernator_target_port"),
+        type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+        set: Some(set_target_port),
         conf: NGX_HTTP_LOC_CONF_OFFSET,
         offset: 0,
         post: core::ptr::null_mut(),
@@ -179,22 +182,6 @@ pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 13] = [
         name: ngx_string!("hibernator_landing_dir"),
         type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
         set: Some(set_landing_dir),
-        conf: NGX_HTTP_LOC_CONF_OFFSET,
-        offset: 0,
-        post: core::ptr::null_mut(),
-    },
-    ngx_command_t {
-        name: ngx_string!("hibernator_eta_sample_size"),
-        type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
-        set: Some(set_eta_sample_size),
-        conf: NGX_HTTP_LOC_CONF_OFFSET,
-        offset: 0,
-        post: core::ptr::null_mut(),
-    },
-    ngx_command_t {
-        name: ngx_string!("hibernator_eta_percentile"),
-        type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
-        set: Some(set_eta_percentile),
         conf: NGX_HTTP_LOC_CONF_OFFSET,
         offset: 0,
         post: core::ptr::null_mut(),
@@ -311,6 +298,23 @@ extern "C" fn set_service_name(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, co
     ngx::core::NGX_CONF_OK
 }
 
+extern "C" fn set_target_port(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf: *mut c_void) -> *mut c_char {
+    let Ok(val) = arg1(cf) else {
+        return ngx::core::NGX_CONF_ERROR;
+    };
+    let conf = unsafe { &mut *(conf as *mut ModuleConfig) };
+    match val.parse::<u16>() {
+        Ok(v) if v > 0 => {
+            conf.target_port = Some(v);
+            ngx::core::NGX_CONF_OK
+        }
+        _ => {
+            ngx_conf_log_error!(NGX_LOG_EMERG, cf, "service port must be a valid TCP port");
+            ngx::core::NGX_CONF_ERROR
+        }
+    }
+}
+
 extern "C" fn set_keep_alive(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf: *mut c_void) -> *mut c_char {
     let Ok(val) = arg1(cf) else {
         return ngx::core::NGX_CONF_ERROR;
@@ -412,36 +416,3 @@ extern "C" fn set_landing_dir(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, con
     ngx::core::NGX_CONF_OK
 }
 
-extern "C" fn set_eta_sample_size(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf: *mut c_void) -> *mut c_char {
-    let Ok(val) = arg1(cf) else {
-        return ngx::core::NGX_CONF_ERROR;
-    };
-    let conf = unsafe { &mut *(conf as *mut ModuleConfig) };
-    match val.parse::<usize>() {
-        Ok(v) => {
-            conf.eta_sample_size = v;
-            ngx::core::NGX_CONF_OK
-        }
-        Err(_) => {
-            ngx_conf_log_error!(NGX_LOG_EMERG, cf, "invalid integer value");
-            ngx::core::NGX_CONF_ERROR
-        }
-    }
-}
-
-extern "C" fn set_eta_percentile(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf: *mut c_void) -> *mut c_char {
-    let Ok(val) = arg1(cf) else {
-        return ngx::core::NGX_CONF_ERROR;
-    };
-    let conf = unsafe { &mut *(conf as *mut ModuleConfig) };
-    match val.parse::<usize>() {
-        Ok(v) if v <= 100 => {
-            conf.eta_percentile = v;
-            ngx::core::NGX_CONF_OK
-        }
-        _ => {
-            ngx_conf_log_error!(NGX_LOG_EMERG, cf, "eta percentile must be between 0 and 100");
-            ngx::core::NGX_CONF_ERROR
-        }
-    }
-}
