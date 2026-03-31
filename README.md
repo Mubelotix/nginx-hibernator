@@ -1,3 +1,6 @@
+> [!IMPORTANT]  
+> This project is undergoing a massive rewrite to transition from a backend running on the side to a module running inside the nginx process itself.
+
 # nginx-hibernator
 
 Automatically hibernate and wake up nginx-proxied sites based on activity, reducing resource usage for idle services.
@@ -295,7 +298,7 @@ This branch also contains an experimental Rust NGINX module in `module/` that ra
 
 - Allow path: request continues to upstream (`NGX_DECLINED`)
 - Deny path: request returns `503 Service Unavailable` with a default embedded landing page
-- Optional setting: `random_gate_landing_uri /your-landing;` to render a custom nginx location instead
+- Optional setting: `random_gate_landing_dir /path/to/landing;` to serve files directly from a folder
 
 Manual commands:
 

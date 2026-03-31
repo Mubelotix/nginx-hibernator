@@ -9,6 +9,7 @@ NGINX_BIN="${NGINX_BIN:-$NGINX_PREFIX/sbin/nginx}"
 TARGET_DIR="${CARGO_TARGET_DIR:-$MODULE_DIR/target}"
 MODULE_SO="${MODULE_SO:-$TARGET_DIR/release/librandom_gate.so}"
 MODULE_AUTO_BUILD="${MODULE_AUTO_BUILD:-1}"
+LANDING_DIR="${LANDING_DIR:-$REPO_DIR/landing}"
 BACKEND_PORT="${BACKEND_PORT:-18081}"
 PROXY_PORT="${PROXY_PORT:-18080}"
 
@@ -49,6 +50,11 @@ ensure_prereqs() {
     log "module not found, building release binary"
     (cd "$MODULE_DIR" && cargo build --release)
   fi
+
+  if [[ ! -d "$LANDING_DIR" ]]; then
+    log "landing directory not found: $LANDING_DIR"
+    return 1
+  fi
 }
 
 write_conf() {
@@ -81,6 +87,7 @@ http {
 
         location / {
             random_gate on;
+          random_gate_landing_dir $LANDING_DIR;
             proxy_pass http://backend;
         }
     }
@@ -209,7 +216,7 @@ Usage: $0 [up|start|stop|status|restart]
 Environment overrides:
   NGINX_BIN, NGINX_PREFIX, CARGO_TARGET_DIR, MODULE_SO
   MODULE_AUTO_BUILD=1|0
-  BACKEND_PORT, PROXY_PORT, RUNTIME_DIR
+  LANDING_DIR, BACKEND_PORT, PROXY_PORT, RUNTIME_DIR
 EOF
 }
 

@@ -1,6 +1,8 @@
 use core::ffi::{c_char, c_void};
 use core::ptr;
 use core::sync::atomic::{AtomicU64, Ordering};
+use std::fs;
+use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ngx::core::{Buffer, Status};
@@ -34,7 +36,7 @@ impl http::HttpModule for Module {
 #[derive(Debug, Default)]
 struct ModuleConfig {
     enable: bool,
-    landing_uri: Option<String>,
+    landing_dir: Option<String>,
 }
 
 unsafe impl HttpModuleLocationConf for Module {
@@ -51,9 +53,9 @@ static mut NGX_HTTP_RANDOM_GATE_COMMANDS: [ngx_command_t; 3] = [
         post: ptr::null_mut(),
     },
     ngx_command_t {
-        name: ngx_string!("random_gate_landing_uri"),
+        name: ngx_string!("random_gate_landing_dir"),
         type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
-        set: Some(ngx_http_random_gate_commands_set_landing_uri),
+        set: Some(ngx_http_random_gate_commands_set_landing_dir),
         conf: NGX_HTTP_LOC_CONF_OFFSET,
         offset: 0,
         post: ptr::null_mut(),
@@ -90,8 +92,8 @@ impl http::Merge for ModuleConfig {
         if prev.enable {
             self.enable = true;
         }
-        if self.landing_uri.is_none() {
-            self.landing_uri = prev.landing_uri.clone();
+        if self.landing_dir.is_none() {
+            self.landing_dir = prev.landing_dir.clone();
         }
         Ok(())
     }
@@ -117,25 +119,41 @@ impl RandomGateRequestHandler {
         if allow {
             Status::NGX_DECLINED
         } else {
-            if let Some(uri) = conf.landing_uri.as_deref() {
-                request.internal_redirect(uri)
-            } else {
-                serve_default_landing_page(request)
-            }
+            serve_landing_page(request, conf.landing_dir.as_deref())
         }
     }
 }
 
-fn serve_default_landing_page(request: &mut Request) -> Status {
+fn serve_landing_page(request: &mut Request, landing_dir: Option<&str>) -> Status {
+    if let Some(dir) = landing_dir {
+        if let Some((body, content_type)) = read_landing_asset(dir, request.path()) {
+            return send_page_response(request, &body, content_type);
+        }
+    }
+
+    send_page_response(
+        request,
+        DEFAULT_LANDING_HTML.as_bytes(),
+        "text/html; charset=utf-8",
+    )
+}
+
+fn send_page_response(request: &mut Request, body: &[u8], content_type: &str) -> Status {
     let rc = request.discard_request_body();
     if rc != Status::NGX_OK {
         return rc;
     }
 
     let pool = request.pool();
-    let Some(mut buf) = pool.create_buffer_from_static_str(DEFAULT_LANDING_HTML) else {
+    let Some(mut buf) = pool.create_buffer(body.len()) else {
         return Status::NGX_ERROR;
     };
+
+    unsafe {
+        let ngx_buf = buf.as_ngx_buf_mut();
+        ptr::copy_nonoverlapping(body.as_ptr(), (*ngx_buf).pos, body.len());
+        (*ngx_buf).last = (*ngx_buf).pos.add(body.len());
+    }
 
     buf.set_last_buf(true);
     buf.set_last_in_chain(true);
@@ -151,15 +169,77 @@ fn serve_default_landing_page(request: &mut Request) -> Status {
     }
 
     request.set_status(http::HTTPStatus::SERVICE_UNAVAILABLE);
-    let _ = request.add_header_out("Content-Type", "text/html; charset=utf-8");
-    request.set_content_length_n(DEFAULT_LANDING_HTML.len());
+    let _ = request.add_header_out("Content-Type", content_type);
+    request.set_content_length_n(body.len());
 
     let header_status = request.send_header();
-    if header_status != Status::NGX_OK || request.header_only() {
+    if header_status != Status::NGX_OK {
         return header_status;
     }
+    if request.header_only() {
+        return Status::NGX_DONE;
+    }
 
-    unsafe { request.output_filter(&mut *chain) }
+    let body_status = unsafe { request.output_filter(&mut *chain) };
+    if body_status == Status::NGX_OK {
+        Status::NGX_DONE
+    } else {
+        body_status
+    }
+}
+
+fn read_landing_asset(landing_dir: &str, uri: &ngx::core::NgxStr) -> Option<(Vec<u8>, &'static str)> {
+    let path = resolve_landing_path(landing_dir, uri.to_str().ok()?)?;
+    let bytes = fs::read(&path).ok()?;
+    let content_type = content_type_for_path(&path);
+    Some((bytes, content_type))
+}
+
+fn resolve_landing_path(landing_dir: &str, uri: &str) -> Option<PathBuf> {
+    let base = Path::new(landing_dir);
+    if !base.is_dir() {
+        return None;
+    }
+
+    let mut rel = PathBuf::new();
+    for comp in Path::new(uri).components() {
+        if let Component::Normal(part) = comp {
+            rel.push(part);
+        }
+    }
+
+    if rel.as_os_str().is_empty() || uri.ends_with('/') {
+        rel.push("index.html");
+    }
+
+    let candidate = base.join(&rel);
+    if candidate.is_file() {
+        return Some(candidate);
+    }
+
+    let fallback = base.join("index.html");
+    if fallback.is_file() {
+        Some(fallback)
+    } else {
+        None
+    }
+}
+
+fn content_type_for_path(path: &Path) -> &'static str {
+    match path.extension().and_then(|s| s.to_str()).unwrap_or("") {
+        "html" | "htm" => "text/html; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "js" | "mjs" => "application/javascript; charset=utf-8",
+        "json" => "application/json; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "ico" => "image/x-icon",
+        "txt" => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    }
 }
 
 extern "C" fn random_gate_access_handler(r: *mut ngx_http_request_t) -> ngx_int_t {
@@ -252,7 +332,7 @@ extern "C" fn ngx_http_random_gate_commands_set_enable(
     ngx::core::NGX_CONF_OK
 }
 
-extern "C" fn ngx_http_random_gate_commands_set_landing_uri(
+extern "C" fn ngx_http_random_gate_commands_set_landing_dir(
     cf: *mut ngx_conf_t,
     _cmd: *mut ngx_command_t,
     conf: *mut c_void,
@@ -267,7 +347,7 @@ extern "C" fn ngx_http_random_gate_commands_set_landing_uri(
                 ngx_conf_log_error!(
                     NGX_LOG_EMERG,
                     cf,
-                    "`random_gate_landing_uri` argument is not utf-8 encoded"
+                    "`random_gate_landing_dir` argument is not utf-8 encoded"
                 );
                 return ngx::core::NGX_CONF_ERROR;
             }
@@ -277,12 +357,12 @@ extern "C" fn ngx_http_random_gate_commands_set_landing_uri(
             ngx_conf_log_error!(
                 NGX_LOG_EMERG,
                 cf,
-                "invalid value for `random_gate_landing_uri`: URI cannot be empty"
+                "invalid value for `random_gate_landing_dir`: path cannot be empty"
             );
             return ngx::core::NGX_CONF_ERROR;
         }
 
-        conf.landing_uri = Some(val.to_owned());
+        conf.landing_dir = Some(val.to_owned());
     }
 
     ngx::core::NGX_CONF_OK
