@@ -1,0 +1,22 @@
+[package]
+name = "nginx-hibernator"
+version = "0.4.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+# rev_lines = "0.3"
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+env_logger = "0.11"
+log = "0.4"
+globset = "0.4"
+tokio = { version="1.41", default-features=false, features = ["macros", "rt", "time", "sync", "fs", "io-util", "process", "net"] }
+tokio-stream ={ version="0.1", default-features=false, features = ["io-util"] }
+libc = "0.2.171"
+heed = "0.22"
+url = "2.5.7"
+serde_json = "1.0.145"
+bincode2 = "2.0.1"
+sha2 = "0.10"

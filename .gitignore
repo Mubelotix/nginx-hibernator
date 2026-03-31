@@ -1,3 +1,4 @@
 nginx-doc.md
 ngx-rust
 .local/
+/target

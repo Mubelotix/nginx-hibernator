@@ -1,0 +1,21 @@
+# Top-level configuration options
+hibernator_port = 7878
+database_path = "./dev/data.mdb"
+landing_folder = "../landing"
+api_key_sha256 = "a2ae6a9ee724b61d83d3cb2ec4a4bfc5d72624008508511935f85a4227a92db6" # your-api-key
+
+# Site-specific configuration block
+[[sites]]
+name = "python_http_proxy"
+nginx_hibernator_config = "/etc/nginx/sites-available/hibernator"
+port = 8000
+access_log = "/var/log/nginx/python_http_proxy_access.log"
+service_name = "simple_python_http"
+hosts = ["localhost", "127.0.0.1", "80.code.mub.lol"] # Last one is for vscode-web port forwarding on my server. Change to your own if required.
+keep_alive = 30
+proxy_mode = "always"
+browser_proxy_mode = "when-ready"
+path_denylist = [
+    "/unimportant",
+    "**/*.rs"
+]
