@@ -1,6 +1,5 @@
 use core::ffi::{c_char, c_void};
 use core::ptr;
-use core::sync::atomic::{AtomicU64, Ordering};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,6 +15,7 @@ use ngx::http::{self, HttpModule, HttpModuleLocationConf, MergeConfigError, Requ
 use ngx::{ngx_conf_log_error, ngx_log_debug_http, ngx_string};
 
 const DEFAULT_LANDING_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Service starting</title><style>body{font-family:system-ui,Segoe UI,sans-serif;margin:40px;color:#222}main{max-width:680px}h1{font-size:1.6rem;margin-bottom:.4rem}p{line-height:1.45}</style></head><body><main><h1>Service is waking up</h1><p>The upstream service is currently hibernated and is being started.</p><p>Please refresh in a few seconds.</p></main></body></html>";
+const LANDING_PREFIX: &str = "/hibernator-landing/";
 
 struct Module;
 
@@ -101,8 +101,6 @@ impl http::Merge for ModuleConfig {
 
 struct RandomGateRequestHandler;
 
-static RNG_STATE: AtomicU64 = AtomicU64::new(0x9E37_79B9_7F4A_7C15);
-
 impl RandomGateRequestHandler {
     fn handler(request: &mut http::Request) -> Status {
         let Some(conf) = Module::location_conf(request) else {
@@ -113,21 +111,27 @@ impl RandomGateRequestHandler {
             return Status::NGX_DECLINED;
         }
 
-        let allow = random_allow(request);
-        ngx_log_debug_http!(request, "random_gate enabled=1 allow={}", allow);
+        if let Ok(uri) = request.path().to_str() {
+            if is_landing_prefixed_uri(uri) {
+                return serve_landing_prefixed_asset(request, conf.landing_dir.as_deref());
+            }
+        }
 
-        if allow {
-            Status::NGX_DECLINED
-        } else {
+        let fail = should_fail_now();
+        ngx_log_debug_http!(request, "random_gate enabled=1 fail_window={}", fail);
+
+        if fail {
             serve_landing_page(request, conf.landing_dir.as_deref())
+        } else {
+            Status::NGX_DECLINED
         }
     }
 }
 
 fn serve_landing_page(request: &mut Request, landing_dir: Option<&str>) -> Status {
     if let Some(dir) = landing_dir {
-        if let Some((body, content_type)) = read_landing_asset(dir, request.path()) {
-            return send_page_response(request, &body, content_type);
+        if let Some((body, content_type)) = read_landing_index(dir) {
+            return send_page_response(request, &body, content_type, http::HTTPStatus::SERVICE_UNAVAILABLE);
         }
     }
 
@@ -135,10 +139,36 @@ fn serve_landing_page(request: &mut Request, landing_dir: Option<&str>) -> Statu
         request,
         DEFAULT_LANDING_HTML.as_bytes(),
         "text/html; charset=utf-8",
+        http::HTTPStatus::SERVICE_UNAVAILABLE,
     )
 }
 
-fn send_page_response(request: &mut Request, body: &[u8], content_type: &str) -> Status {
+fn serve_landing_prefixed_asset(request: &mut Request, landing_dir: Option<&str>) -> Status {
+    let Some(dir) = landing_dir else {
+        return http::HTTPStatus::NOT_FOUND.into();
+    };
+
+    let Ok(uri) = request.path().to_str() else {
+        return http::HTTPStatus::NOT_FOUND.into();
+    };
+
+    let Some(rel_path) = landing_rel_path_from_uri(uri) else {
+        return http::HTTPStatus::NOT_FOUND.into();
+    };
+
+    let Some((body, content_type)) = read_landing_asset_by_rel_path(dir, rel_path) else {
+        return http::HTTPStatus::NOT_FOUND.into();
+    };
+
+    send_page_response(request, &body, content_type, http::HTTPStatus::OK)
+}
+
+fn send_page_response(
+    request: &mut Request,
+    body: &[u8],
+    content_type: &str,
+    status: http::HTTPStatus,
+) -> Status {
     let rc = request.discard_request_body();
     if rc != Status::NGX_OK {
         return rc;
@@ -168,7 +198,7 @@ fn send_page_response(request: &mut Request, body: &[u8], content_type: &str) ->
         (*chain).next = ptr::null_mut();
     }
 
-    request.set_status(http::HTTPStatus::SERVICE_UNAVAILABLE);
+    request.set_status(status);
     let _ = request.add_header_out("Content-Type", content_type);
     request.set_content_length_n(body.len());
 
@@ -188,28 +218,49 @@ fn send_page_response(request: &mut Request, body: &[u8], content_type: &str) ->
     }
 }
 
-fn read_landing_asset(landing_dir: &str, uri: &ngx::core::NgxStr) -> Option<(Vec<u8>, &'static str)> {
-    let path = resolve_landing_path(landing_dir, uri.to_str().ok()?)?;
+fn read_landing_index(landing_dir: &str) -> Option<(Vec<u8>, &'static str)> {
+    read_landing_asset_by_rel_path(landing_dir, "index.html")
+}
+
+fn read_landing_asset_by_rel_path(landing_dir: &str, rel_path: &str) -> Option<(Vec<u8>, &'static str)> {
+    let path = resolve_landing_path(landing_dir, rel_path)?;
     let bytes = fs::read(&path).ok()?;
     let content_type = content_type_for_path(&path);
     Some((bytes, content_type))
 }
 
-fn resolve_landing_path(landing_dir: &str, uri: &str) -> Option<PathBuf> {
+fn is_landing_prefixed_uri(uri: &str) -> bool {
+    uri == "/hibernator-landing" || uri.starts_with(LANDING_PREFIX)
+}
+
+fn landing_rel_path_from_uri(uri: &str) -> Option<&str> {
+    if uri == "/hibernator-landing" {
+        return Some("index.html");
+    }
+
+    let rel = uri.strip_prefix(LANDING_PREFIX)?;
+    if rel.is_empty() {
+        Some("index.html")
+    } else {
+        Some(rel)
+    }
+}
+
+fn resolve_landing_path(landing_dir: &str, rel_path: &str) -> Option<PathBuf> {
     let base = Path::new(landing_dir);
     if !base.is_dir() {
         return None;
     }
 
     let mut rel = PathBuf::new();
-    for comp in Path::new(uri).components() {
+    for comp in Path::new(rel_path).components() {
         if let Component::Normal(part) = comp {
             rel.push(part);
         }
     }
 
-    if rel.as_os_str().is_empty() || uri.ends_with('/') {
-        rel.push("index.html");
+    if rel.as_os_str().is_empty() {
+        return None;
     }
 
     let candidate = base.join(&rel);
@@ -217,12 +268,7 @@ fn resolve_landing_path(landing_dir: &str, uri: &str) -> Option<PathBuf> {
         return Some(candidate);
     }
 
-    let fallback = base.join("index.html");
-    if fallback.is_file() {
-        Some(fallback)
-    } else {
-        None
-    }
+    None
 }
 
 fn content_type_for_path(path: &Path) -> &'static str {
@@ -276,20 +322,12 @@ unsafe fn register_access_handler(cf: *mut ngx_conf_t) -> Result<(), ()> {
     Ok(())
 }
 
-fn random_allow(request: &http::Request) -> bool {
-    let now = SystemTime::now()
+fn should_fail_now() -> bool {
+    let now_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0_u64, |d| d.as_nanos() as u64);
-    let req_addr = (request as *const http::Request as usize) as u64;
-
-    let mut x = RNG_STATE.fetch_add(0xA076_1D64_78BD_642F, Ordering::Relaxed)
-        ^ now
-        ^ req_addr.rotate_left(17);
-    x ^= x << 13;
-    x ^= x >> 7;
-    x ^= x << 17;
-
-    (x & 1) == 1
+        .map_or(0_u64, |d| d.as_secs());
+    let window = (now_secs / 10) % 2;
+    window == 0
 }
 
 extern "C" fn ngx_http_random_gate_commands_set_enable(
