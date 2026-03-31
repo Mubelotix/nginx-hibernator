@@ -1,0 +1,17 @@
+[package]
+name = "nginx-random-gate"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+
+[lib]
+name = "random_gate"
+crate-type = ["cdylib"]
+
+[dependencies]
+ngx = { version = "0.5", default-features = false, features = ["std", "vendored"] }
+
+[features]
+default = ["export-modules"]
+export-modules = []

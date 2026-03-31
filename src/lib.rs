@@ -1,0 +1,199 @@
+use core::ffi::{c_char, c_void};
+use core::ptr;
+use core::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use ngx::core::Status;
+use ngx::ffi::{
+    NGX_CONF_TAKE1, NGX_HTTP_LOC_CONF, NGX_HTTP_LOC_CONF_OFFSET, NGX_HTTP_MODULE, NGX_LOG_EMERG,
+    ngx_array_push, ngx_command_t, ngx_conf_t, ngx_http_conf_ctx_t, ngx_http_core_main_conf_t,
+    ngx_http_core_module, ngx_http_handler_pt, ngx_http_module_t, ngx_http_phases_NGX_HTTP_ACCESS_PHASE,
+    ngx_http_request_t, ngx_int_t, ngx_module_t, ngx_str_t, ngx_uint_t,
+};
+use ngx::http::{self, HttpModule, HttpModuleLocationConf, MergeConfigError, Request};
+use ngx::{ngx_conf_log_error, ngx_log_debug_http, ngx_string};
+
+struct Module;
+
+impl http::HttpModule for Module {
+    fn module() -> &'static ngx_module_t {
+        unsafe { &*::core::ptr::addr_of!(ngx_http_random_gate_module) }
+    }
+
+    unsafe extern "C" fn postconfiguration(cf: *mut ngx_conf_t) -> ngx_int_t {
+        if register_access_handler(cf).is_ok() {
+            Status::NGX_OK.into()
+        } else {
+            Status::NGX_ERROR.into()
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct ModuleConfig {
+    enable: bool,
+}
+
+unsafe impl HttpModuleLocationConf for Module {
+    type LocationConf = ModuleConfig;
+}
+
+static mut NGX_HTTP_RANDOM_GATE_COMMANDS: [ngx_command_t; 2] = [
+    ngx_command_t {
+        name: ngx_string!("random_gate"),
+        type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+        set: Some(ngx_http_random_gate_commands_set_enable),
+        conf: NGX_HTTP_LOC_CONF_OFFSET,
+        offset: 0,
+        post: ptr::null_mut(),
+    },
+    ngx_command_t::empty(),
+];
+
+static NGX_HTTP_RANDOM_GATE_MODULE_CTX: ngx_http_module_t = ngx_http_module_t {
+    preconfiguration: Some(Module::preconfiguration),
+    postconfiguration: Some(Module::postconfiguration),
+    create_main_conf: None,
+    init_main_conf: None,
+    create_srv_conf: None,
+    merge_srv_conf: None,
+    create_loc_conf: Some(Module::create_loc_conf),
+    merge_loc_conf: Some(Module::merge_loc_conf),
+};
+
+#[cfg(feature = "export-modules")]
+ngx::ngx_modules!(ngx_http_random_gate_module);
+
+#[used]
+#[allow(non_upper_case_globals)]
+#[cfg_attr(not(feature = "export-modules"), unsafe(no_mangle))]
+pub static mut ngx_http_random_gate_module: ngx_module_t = ngx_module_t {
+    ctx: &raw const NGX_HTTP_RANDOM_GATE_MODULE_CTX as _,
+    commands: unsafe { &raw mut NGX_HTTP_RANDOM_GATE_COMMANDS[0] },
+    type_: NGX_HTTP_MODULE as _,
+    ..ngx_module_t::default()
+};
+
+impl http::Merge for ModuleConfig {
+    fn merge(&mut self, prev: &ModuleConfig) -> Result<(), MergeConfigError> {
+        if prev.enable {
+            self.enable = true;
+        }
+        Ok(())
+    }
+}
+
+struct RandomGateRequestHandler;
+
+static RNG_STATE: AtomicU64 = AtomicU64::new(0x9E37_79B9_7F4A_7C15);
+
+impl RandomGateRequestHandler {
+    fn handler(request: &mut http::Request) -> Status {
+        let Some(conf) = Module::location_conf(request) else {
+            return Status::NGX_ERROR;
+        };
+
+        if !conf.enable {
+            return Status::NGX_DECLINED;
+        }
+
+        let allow = random_allow(request);
+        ngx_log_debug_http!(request, "random_gate enabled=1 allow={}", allow);
+
+        if allow {
+            Status::NGX_DECLINED
+        } else {
+            http::HTTPStatus::SERVICE_UNAVAILABLE.into()
+        }
+    }
+}
+
+extern "C" fn random_gate_access_handler(r: *mut ngx_http_request_t) -> ngx_int_t {
+    let request = unsafe { Request::from_ngx_http_request(r) };
+    RandomGateRequestHandler::handler(request).into()
+}
+
+unsafe fn register_access_handler(cf: *mut ngx_conf_t) -> Result<(), ()> {
+    let cf_ref = unsafe { &mut *cf };
+    let conf_ctx = cf_ref.ctx.cast::<ngx_http_conf_ctx_t>();
+    if conf_ctx.is_null() {
+        return Err(());
+    }
+
+    let conf_ctx = unsafe { &mut *conf_ctx };
+    let core_module = unsafe { &*::core::ptr::addr_of!(ngx_http_core_module) };
+    let cmcf_ptr = unsafe { *conf_ctx.main_conf.add(core_module.ctx_index) }
+        .cast::<ngx_http_core_main_conf_t>();
+    if cmcf_ptr.is_null() {
+        return Err(());
+    }
+
+    let cmcf = unsafe { &mut *cmcf_ptr };
+    let handlers = &mut cmcf.phases[ngx_http_phases_NGX_HTTP_ACCESS_PHASE as usize].handlers;
+    let h = unsafe { ngx_array_push(handlers).cast::<ngx_http_handler_pt>() };
+    if h.is_null() {
+        ngx_conf_log_error!(NGX_LOG_EMERG, cf, "failed to register random_gate access handler");
+        return Err(());
+    }
+
+    unsafe {
+        *h = Some(random_gate_access_handler);
+    }
+    Ok(())
+}
+
+fn random_allow(request: &http::Request) -> bool {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0_u64, |d| d.as_nanos() as u64);
+    let req_addr = (request as *const http::Request as usize) as u64;
+
+    let mut x = RNG_STATE.fetch_add(0xA076_1D64_78BD_642F, Ordering::Relaxed)
+        ^ now
+        ^ req_addr.rotate_left(17);
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+
+    (x & 1) == 1
+}
+
+extern "C" fn ngx_http_random_gate_commands_set_enable(
+    cf: *mut ngx_conf_t,
+    _cmd: *mut ngx_command_t,
+    conf: *mut c_void,
+) -> *mut c_char {
+    unsafe {
+        let conf = &mut *(conf as *mut ModuleConfig);
+        let args: &[ngx_str_t] = (*(*cf).args).as_slice();
+
+        let val = match args[1].to_str() {
+            Ok(s) => s,
+            Err(_) => {
+                ngx_conf_log_error!(
+                    NGX_LOG_EMERG,
+                    cf,
+                    "`random_gate` argument is not utf-8 encoded"
+                );
+                return ngx::core::NGX_CONF_ERROR;
+            }
+        };
+
+        conf.enable = false;
+
+        if val.len() == 2 && val.eq_ignore_ascii_case("on") {
+            conf.enable = true;
+        } else if val.len() == 3 && val.eq_ignore_ascii_case("off") {
+            conf.enable = false;
+        } else {
+            ngx_conf_log_error!(
+                NGX_LOG_EMERG,
+                cf,
+                "invalid value for `random_gate`: use `on` or `off`"
+            );
+            return ngx::core::NGX_CONF_ERROR;
+        }
+    }
+
+    ngx::core::NGX_CONF_OK
+}
