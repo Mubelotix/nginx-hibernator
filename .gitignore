@@ -2,3 +2,4 @@ nginx-doc.md
 ngx-rust
 .local/
 /target
+/module/target

@@ -291,7 +291,7 @@ The only known alternative is [GoDoxy](https://github.com/yusing/go-proxy?tab=re
 
 ## Experimental: Random Gate NGINX Module
 
-This branch also contains an experimental Rust NGINX module in the repository root that randomly allows or denies proxied requests.
+This branch also contains an experimental Rust NGINX module in `module/` that randomly allows or denies proxied requests.
 
 - Allow path: request continues to upstream (`NGX_DECLINED`)
 - Deny path: request returns `503 Service Unavailable`
@@ -299,8 +299,10 @@ This branch also contains an experimental Rust NGINX module in the repository ro
 Manual commands:
 
 ```bash
+cd module
 cargo build --release
+cd ..
 scripts/build-nginx.sh
 scripts/test-random-gate.sh
-./run.sh start
+scripts/run.sh start
 ```
