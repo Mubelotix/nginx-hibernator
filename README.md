@@ -292,15 +292,73 @@ Malicious configurations could trigger code execution as root, and XSS injection
 
 The only known alternative is [GoDoxy](https://github.com/yusing/go-proxy?tab=readme-ov-file#idlesleeper). Unfortunately, this requires you to ditch nginx entirely for a less-mature proxy, and only supports docker containers rather than any systemd service.
 
-## Experimental: Random Gate NGINX Module
+## NGINX Module Configuration Goals
 
-This branch also contains an experimental Rust NGINX module in `module/` that randomly allows or denies proxied requests.
+The old backend (`./backend`) had a rich per-site config model. The target is to expose equivalent behavior as clear, optional nginx directives with sane defaults.
 
-- Allow path: request continues to upstream (`NGX_DECLINED`)
-- Deny path: request returns `503 Service Unavailable` with a default embedded landing page
-- Optional setting: `random_gate_landing_dir /path/to/landing;` to serve files directly from a folder
+### Sample `nginx.conf` (target design)
 
-Manual commands:
+```nginx
+http {
+  upstream app_backend {
+    server 127.0.0.1:18081;
+  }
+
+  server {
+    listen 127.0.0.1:18080;
+    server_name localhost;
+
+    location / {
+      # Enable hibernation logic for this location.
+      hibernator on;
+
+      # Service to wake/suspend.
+      # Required when service control is enabled.
+      hibernator_service_name simple_python_http;
+
+      # Keep backend alive after the last qualifying request.
+      hibernator_keep_alive 5m;
+
+      # Max wait for startup before returning fallback response.
+      hibernator_start_timeout 5m;
+
+      # Poll interval while waiting for service startup.
+      hibernator_start_check_interval 100ms;
+
+      # Request proxy behavior while service is waking.
+      # Values: always | when_ready | never
+      hibernator_proxy_mode always;
+
+      # Same as above but for browser-originated requests.
+      hibernator_browser_proxy_mode when_ready;
+
+      # Max time to keep a proxied request open while waiting.
+      hibernator_proxy_timeout 28s;
+
+      # Poll interval used by proxy readiness checks.
+      hibernator_proxy_check_interval 500ms;
+
+      # Folder containing landing page files (index + assets).
+      hibernator_landing_dir /var/www/nginx-hibernator/landing;
+
+      # Startup ETA model tuning.
+      hibernator_eta_sample_size 100;
+      hibernator_eta_percentile 95;
+
+      proxy_pass http://app_backend;
+    }
+  }
+}
+```
+
+Process-level legacy settings like `hibernator_port`, `database_path`, `api_key_sha256`, and deployment path fields are intentionally not planned as nginx directives.
+
+Current implementation is a transitional subset:
+
+- `random_gate on|off`
+- `random_gate_landing_dir /path/to/landing`
+
+### Build and run helpers
 
 ```bash
 cd module
