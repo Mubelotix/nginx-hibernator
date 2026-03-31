@@ -3,41 +3,45 @@ set -euo pipefail
 
 MODULE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_DIR="$(cd "$MODULE_DIR/.." && pwd)"
-RUNTIME_DIR="${RUNTIME_DIR:-$REPO_DIR/.local/manual-run}"
-NGINX_PREFIX="${NGINX_PREFIX:-$REPO_DIR/.local/nginx}"
-NGINX_BIN="${NGINX_BIN:-$NGINX_PREFIX/sbin/nginx}"
-TARGET_DIR="${CARGO_TARGET_DIR:-$MODULE_DIR/target}"
-MODULE_SO="${MODULE_SO:-$TARGET_DIR/release/librandom_gate.so}"
-MODULE_AUTO_BUILD="${MODULE_AUTO_BUILD:-1}"
-LANDING_DIR="${LANDING_DIR:-$REPO_DIR/landing}"
-BACKEND_PORT="${BACKEND_PORT:-18081}"
-PROXY_PORT="${PROXY_PORT:-18080}"
-SERVICE_NAME="${SERVICE_NAME:-hibernator-demo-backend}"
-KEEPALIVE_SECS="${KEEPALIVE_SECS:-20}"
-STARTUP_DELAY_SECS="${STARTUP_DELAY_SECS:-5}"
+RUNTIME_DIR="$REPO_DIR/.local/manual-run"
+NGINX_PREFIX="$REPO_DIR/.local/nginx"
+NGINX_BIN="$NGINX_PREFIX/sbin/nginx"
+TARGET_DIR="${TARGET_DIR:-}"
+MODULE_SO="${MODULE_SO:-}"
+LANDING_DIR="$REPO_DIR/landing"
+BACKEND_PORT="18081"
+PROXY_PORT="18080"
+SERVICE_NAME="hibernator-demo-backend"
+KEEPALIVE_SECS="20"
+STARTUP_DELAY_SECS="5"
 
 NGINX_PID_FILE="$RUNTIME_DIR/nginx.pid"
 CONF_FILE="$RUNTIME_DIR/nginx.conf"
 BACKEND_ROOT="$RUNTIME_DIR/backend-root"
 SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME.service"
 ACCESS_LOG_FILE="$RUNTIME_DIR/logs/access.log"
-PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 || true)}"
-
-cmd="${1:-up}"
-
+PYTHON_BIN="$(command -v python3 || true)"
 if [[ "${EUID:-$(id -u)}" -ne 0 && "${HIBERNATOR_RUN_AS_ROOT:-0}" != "1" ]]; then
-  if [[ "$MODULE_AUTO_BUILD" = "1" ]]; then
-    printf '[run.sh] building module (MODULE_AUTO_BUILD=1) as user session\n'
-    (cd "$MODULE_DIR" && cargo build --release)
-    export MODULE_AUTO_BUILD=0
-  elif [[ ! -f "$MODULE_SO" ]]; then
-    printf '[run.sh] module not found, building release binary as user session\n'
-    (cd "$MODULE_DIR" && cargo build --release)
-    export MODULE_AUTO_BUILD=0
+  TARGET_DIR="$(cd "$MODULE_DIR" && cargo metadata --format-version 1 --no-deps | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p' | head -n1)"
+  if [[ -z "$TARGET_DIR" ]]; then
+    printf '[run.sh] could not resolve cargo target directory\n' >&2
+    exit 1
   fi
+  MODULE_SO="$TARGET_DIR/release/librandom_gate.so"
+  export TARGET_DIR MODULE_SO
 
-  exec sudo --preserve-env=PATH,CARGO_TARGET_DIR,MODULE_AUTO_BUILD,NGINX_BIN,NGINX_PREFIX,MODULE_SO,LANDING_DIR,BACKEND_PORT,PROXY_PORT,SERVICE_NAME,KEEPALIVE_SECS,STARTUP_DELAY_SECS,RUNTIME_DIR,PYTHON_BIN,HIBERNATOR_RUN_AS_ROOT \
+  printf '[run.sh] building module as user session\n'
+  (cd "$MODULE_DIR" && cargo build --release)
+
+  exec sudo --preserve-env=PATH,TARGET_DIR,MODULE_SO,HIBERNATOR_RUN_AS_ROOT \
     HIBERNATOR_RUN_AS_ROOT=1 "$0" "$@"
+fi
+
+if [[ -z "$TARGET_DIR" ]]; then
+  TARGET_DIR="/tmp/cargo-target"
+fi
+if [[ -z "$MODULE_SO" ]]; then
+  MODULE_SO="$TARGET_DIR/release/librandom_gate.so"
 fi
 
 log() {
@@ -60,15 +64,15 @@ ensure_prereqs() {
   if [[ ! -x "$NGINX_BIN" ]]; then
     log "nginx binary not found, running module/scripts/build-nginx.sh"
     "$MODULE_DIR/scripts/build-nginx.sh"
-    return
+    if [[ ! -x "$NGINX_BIN" ]]; then
+      log "nginx build did not produce expected binary: $NGINX_BIN"
+      return 1
+    fi
   fi
 
-  if [[ "$MODULE_AUTO_BUILD" = "1" ]]; then
-    log "building module (MODULE_AUTO_BUILD=1)"
-    (cd "$MODULE_DIR" && cargo build --release)
-  elif [[ ! -f "$MODULE_SO" ]]; then
-    log "module not found, building release binary"
-    (cd "$MODULE_DIR" && cargo build --release)
+  if [[ ! -f "$MODULE_SO" ]]; then
+    log "module binary not found at $MODULE_SO"
+    return 1
   fi
 
   if [[ ! -d "$LANDING_DIR" ]]; then
@@ -83,16 +87,6 @@ ensure_prereqs() {
 
   if ! command -v systemctl >/dev/null 2>&1; then
     log "systemctl not found"
-    return 1
-  fi
-
-  if ! [[ "$KEEPALIVE_SECS" =~ ^[0-9]+$ ]] || [[ "$KEEPALIVE_SECS" -lt 1 ]]; then
-    log "KEEPALIVE_SECS must be a positive integer (got: $KEEPALIVE_SECS)"
-    return 1
-  fi
-
-  if ! [[ "$STARTUP_DELAY_SECS" =~ ^[0-9]+$ ]]; then
-    log "STARTUP_DELAY_SECS must be a non-negative integer (got: $STARTUP_DELAY_SECS)"
     return 1
   fi
 }
@@ -240,83 +234,23 @@ status() {
   log "test url: http://127.0.0.1:$PROXY_PORT/"
 }
 
-up() {
-  ensure_prereqs
-  write_conf
-  provision_backend_service
-  stop_backend_service
-  start_nginx
+ensure_prereqs
+write_conf
+provision_backend_service
+stop_backend_service
+start_nginx
+status
 
-  log "manual test is ready"
-  log "try: curl -i http://127.0.0.1:$PROXY_PORT/"
-  log "backend service starts/stops from module logic"
-  log "press Ctrl+C to stop nginx"
+log "manual test is ready"
+log "try: curl -i http://127.0.0.1:$PROXY_PORT/"
+log "backend service starts/stops from module logic"
+log "press Ctrl+C to stop nginx and backend service"
 
-  cleanup() {
-    stop_one "nginx" "$NGINX_PID_FILE"
-  }
-  trap cleanup EXIT INT TERM
-
-  local npid
-  npid="$(read_pid "$NGINX_PID_FILE")"
-  wait "$npid"
-}
-
-start_detached() {
-  ensure_prereqs
-  write_conf
-  provision_backend_service
-  stop_backend_service
-  start_nginx
-  status
-  log "tail logs: tail -f $RUNTIME_DIR/logs/error.log"
-}
-
-stop_all() {
+cleanup() {
   stop_one "nginx" "$NGINX_PID_FILE"
   stop_backend_service
 }
+trap cleanup EXIT INT TERM
 
-usage() {
-  cat <<EOF
-Usage: $0 [up|start|stop|status|restart]
-
-  up       Install backend service, start nginx, stay attached (default)
-  start    Install backend service, start nginx detached
-  stop     Stop nginx + backend service
-  status   Show current status
-  restart  Stop then start detached
-
-Environment overrides:
-  NGINX_BIN, NGINX_PREFIX, CARGO_TARGET_DIR, MODULE_SO
-  MODULE_AUTO_BUILD=1|0
-  LANDING_DIR, BACKEND_PORT, PROXY_PORT, RUNTIME_DIR
-  SERVICE_NAME, KEEPALIVE_SECS, STARTUP_DELAY_SECS
-EOF
-}
-
-case "$cmd" in
-  up)
-    up
-    ;;
-  start)
-    start_detached
-    ;;
-  stop)
-    stop_all
-    ;;
-  status)
-    status
-    ;;
-  restart)
-    stop_all
-    start_detached
-    ;;
-  -h|--help|help)
-    usage
-    ;;
-  *)
-    usage
-    exit 2
-    ;;
-esac
+npid="$(read_pid "$NGINX_PID_FILE")"
+wait "$npid"
