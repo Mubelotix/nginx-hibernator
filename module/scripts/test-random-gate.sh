@@ -71,6 +71,7 @@ http {
         location / {
           hibernator on;
             hibernator_target_port $BACKEND_PORT;
+            hibernator_proxy_mode never;
             proxy_pass http://backend;
         }
     }
