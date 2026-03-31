@@ -3,15 +3,17 @@ use core::ptr;
 use core::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use ngx::core::Status;
+use ngx::core::{Buffer, Status};
 use ngx::ffi::{
     NGX_CONF_TAKE1, NGX_HTTP_LOC_CONF, NGX_HTTP_LOC_CONF_OFFSET, NGX_HTTP_MODULE, NGX_LOG_EMERG,
     ngx_array_push, ngx_command_t, ngx_conf_t, ngx_http_conf_ctx_t, ngx_http_core_main_conf_t,
     ngx_http_core_module, ngx_http_handler_pt, ngx_http_module_t, ngx_http_phases_NGX_HTTP_ACCESS_PHASE,
-    ngx_http_request_t, ngx_int_t, ngx_module_t, ngx_str_t, ngx_uint_t,
+    ngx_http_request_t, ngx_int_t, ngx_module_t, ngx_str_t, ngx_uint_t, ngx_chain_t,
 };
 use ngx::http::{self, HttpModule, HttpModuleLocationConf, MergeConfigError, Request};
 use ngx::{ngx_conf_log_error, ngx_log_debug_http, ngx_string};
+
+const DEFAULT_LANDING_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Service starting</title><style>body{font-family:system-ui,Segoe UI,sans-serif;margin:40px;color:#222}main{max-width:680px}h1{font-size:1.6rem;margin-bottom:.4rem}p{line-height:1.45}</style></head><body><main><h1>Service is waking up</h1><p>The upstream service is currently hibernated and is being started.</p><p>Please refresh in a few seconds.</p></main></body></html>";
 
 struct Module;
 
@@ -32,17 +34,26 @@ impl http::HttpModule for Module {
 #[derive(Debug, Default)]
 struct ModuleConfig {
     enable: bool,
+    landing_uri: Option<String>,
 }
 
 unsafe impl HttpModuleLocationConf for Module {
     type LocationConf = ModuleConfig;
 }
 
-static mut NGX_HTTP_RANDOM_GATE_COMMANDS: [ngx_command_t; 2] = [
+static mut NGX_HTTP_RANDOM_GATE_COMMANDS: [ngx_command_t; 3] = [
     ngx_command_t {
         name: ngx_string!("random_gate"),
         type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
         set: Some(ngx_http_random_gate_commands_set_enable),
+        conf: NGX_HTTP_LOC_CONF_OFFSET,
+        offset: 0,
+        post: ptr::null_mut(),
+    },
+    ngx_command_t {
+        name: ngx_string!("random_gate_landing_uri"),
+        type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+        set: Some(ngx_http_random_gate_commands_set_landing_uri),
         conf: NGX_HTTP_LOC_CONF_OFFSET,
         offset: 0,
         post: ptr::null_mut(),
@@ -79,6 +90,9 @@ impl http::Merge for ModuleConfig {
         if prev.enable {
             self.enable = true;
         }
+        if self.landing_uri.is_none() {
+            self.landing_uri = prev.landing_uri.clone();
+        }
         Ok(())
     }
 }
@@ -103,9 +117,49 @@ impl RandomGateRequestHandler {
         if allow {
             Status::NGX_DECLINED
         } else {
-            http::HTTPStatus::SERVICE_UNAVAILABLE.into()
+            if let Some(uri) = conf.landing_uri.as_deref() {
+                request.internal_redirect(uri)
+            } else {
+                serve_default_landing_page(request)
+            }
         }
     }
+}
+
+fn serve_default_landing_page(request: &mut Request) -> Status {
+    let rc = request.discard_request_body();
+    if rc != Status::NGX_OK {
+        return rc;
+    }
+
+    let pool = request.pool();
+    let Some(mut buf) = pool.create_buffer_from_static_str(DEFAULT_LANDING_HTML) else {
+        return Status::NGX_ERROR;
+    };
+
+    buf.set_last_buf(true);
+    buf.set_last_in_chain(true);
+
+    let chain = pool.calloc_type::<ngx_chain_t>();
+    if chain.is_null() {
+        return Status::NGX_ERROR;
+    }
+
+    unsafe {
+        (*chain).buf = buf.as_ngx_buf_mut();
+        (*chain).next = ptr::null_mut();
+    }
+
+    request.set_status(http::HTTPStatus::SERVICE_UNAVAILABLE);
+    let _ = request.add_header_out("Content-Type", "text/html; charset=utf-8");
+    request.set_content_length_n(DEFAULT_LANDING_HTML.len());
+
+    let header_status = request.send_header();
+    if header_status != Status::NGX_OK || request.header_only() {
+        return header_status;
+    }
+
+    unsafe { request.output_filter(&mut *chain) }
 }
 
 extern "C" fn random_gate_access_handler(r: *mut ngx_http_request_t) -> ngx_int_t {
@@ -193,6 +247,42 @@ extern "C" fn ngx_http_random_gate_commands_set_enable(
             );
             return ngx::core::NGX_CONF_ERROR;
         }
+    }
+
+    ngx::core::NGX_CONF_OK
+}
+
+extern "C" fn ngx_http_random_gate_commands_set_landing_uri(
+    cf: *mut ngx_conf_t,
+    _cmd: *mut ngx_command_t,
+    conf: *mut c_void,
+) -> *mut c_char {
+    unsafe {
+        let conf = &mut *(conf as *mut ModuleConfig);
+        let args: &[ngx_str_t] = (*(*cf).args).as_slice();
+
+        let val = match args[1].to_str() {
+            Ok(s) => s,
+            Err(_) => {
+                ngx_conf_log_error!(
+                    NGX_LOG_EMERG,
+                    cf,
+                    "`random_gate_landing_uri` argument is not utf-8 encoded"
+                );
+                return ngx::core::NGX_CONF_ERROR;
+            }
+        };
+
+        if val.is_empty() {
+            ngx_conf_log_error!(
+                NGX_LOG_EMERG,
+                cf,
+                "invalid value for `random_gate_landing_uri`: URI cannot be empty"
+            );
+            return ngx::core::NGX_CONF_ERROR;
+        }
+
+        conf.landing_uri = Some(val.to_owned());
     }
 
     ngx::core::NGX_CONF_OK

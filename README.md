@@ -294,7 +294,8 @@ The only known alternative is [GoDoxy](https://github.com/yusing/go-proxy?tab=re
 This branch also contains an experimental Rust NGINX module in `module/` that randomly allows or denies proxied requests.
 
 - Allow path: request continues to upstream (`NGX_DECLINED`)
-- Deny path: request returns `503 Service Unavailable`
+- Deny path: request returns `503 Service Unavailable` with a default embedded landing page
+- Optional setting: `random_gate_landing_uri /your-landing;` to render a custom nginx location instead
 
 Manual commands:
 

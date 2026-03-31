@@ -8,6 +8,7 @@ NGINX_PREFIX="${NGINX_PREFIX:-$REPO_DIR/.local/nginx}"
 NGINX_BIN="${NGINX_BIN:-$NGINX_PREFIX/sbin/nginx}"
 TARGET_DIR="${CARGO_TARGET_DIR:-$MODULE_DIR/target}"
 MODULE_SO="${MODULE_SO:-$TARGET_DIR/release/librandom_gate.so}"
+MODULE_AUTO_BUILD="${MODULE_AUTO_BUILD:-1}"
 BACKEND_PORT="${BACKEND_PORT:-18081}"
 PROXY_PORT="${PROXY_PORT:-18080}"
 
@@ -35,9 +36,18 @@ read_pid() {
 }
 
 ensure_prereqs() {
-  if [[ ! -x "$NGINX_BIN" || ! -f "$MODULE_SO" ]]; then
-    log "nginx or module not found, running scripts/build-nginx.sh"
+  if [[ ! -x "$NGINX_BIN" ]]; then
+    log "nginx binary not found, running module/scripts/build-nginx.sh"
     "$MODULE_DIR/scripts/build-nginx.sh"
+    return
+  fi
+
+  if [[ "$MODULE_AUTO_BUILD" = "1" ]]; then
+    log "building module (MODULE_AUTO_BUILD=1)"
+    (cd "$MODULE_DIR" && cargo build --release)
+  elif [[ ! -f "$MODULE_SO" ]]; then
+    log "module not found, building release binary"
+    (cd "$MODULE_DIR" && cargo build --release)
   fi
 }
 
@@ -198,6 +208,7 @@ Usage: $0 [up|start|stop|status|restart]
 
 Environment overrides:
   NGINX_BIN, NGINX_PREFIX, CARGO_TARGET_DIR, MODULE_SO
+  MODULE_AUTO_BUILD=1|0
   BACKEND_PORT, PROXY_PORT, RUNTIME_DIR
 EOF
 }

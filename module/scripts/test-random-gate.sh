@@ -7,6 +7,7 @@ NGINX_PREFIX="${NGINX_PREFIX:-$REPO_DIR/.local/nginx}"
 NGINX_BIN="${NGINX_BIN:-$NGINX_PREFIX/sbin/nginx}"
 TARGET_DIR="${CARGO_TARGET_DIR:-$MODULE_DIR/target}"
 MODULE_SO="${MODULE_SO:-$TARGET_DIR/release/librandom_gate.so}"
+MODULE_AUTO_BUILD="${MODULE_AUTO_BUILD:-1}"
 REQUESTS="${REQUESTS:-100}"
 WORK_DIR="${WORK_DIR:-$REPO_DIR/.local/test-run}"
 BACKEND_PORT="${BACKEND_PORT:-18081}"
@@ -18,8 +19,8 @@ if [[ ! -x "$NGINX_BIN" ]]; then
   exit 1
 fi
 
-if [[ ! -f "$MODULE_SO" ]]; then
-  echo "Module not found at $MODULE_SO, building release module now."
+if [[ "$MODULE_AUTO_BUILD" = "1" || ! -f "$MODULE_SO" ]]; then
+  echo "Building release module."
   (cd "$MODULE_DIR" && cargo build --release)
 fi
 
