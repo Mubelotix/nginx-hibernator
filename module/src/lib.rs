@@ -7,7 +7,7 @@ use ngx::ffi::{
     NGX_HTTP_MODULE, NGX_LOG_EMERG,
     ngx_array_push, ngx_conf_t, ngx_http_conf_ctx_t, ngx_http_core_main_conf_t,
     ngx_http_core_module, ngx_http_handler_pt, ngx_http_module_t, ngx_http_phases_NGX_HTTP_ACCESS_PHASE,
-    ngx_http_request_t, ngx_int_t, ngx_module_t, ngx_chain_t,
+    ngx_http_request_t, ngx_int_t, ngx_module_t, ngx_chain_t, ngx_cycle_t,
 };
 use ngx::http::{self, HttpModule, HttpModuleLocationConf, Request};
 use ngx::{ngx_conf_log_error, ngx_log_debug_http};
@@ -61,8 +61,14 @@ pub static mut ngx_http_random_gate_module: ngx_module_t = ngx_module_t {
     ctx: &raw const NGX_HTTP_RANDOM_GATE_MODULE_CTX as _,
     commands: unsafe { &raw mut config::NGX_HTTP_HIBERNATOR_COMMANDS[0] },
     type_: NGX_HTTP_MODULE as _,
+    init_process: Some(random_gate_init_process),
     ..ngx_module_t::default()
 };
+
+unsafe extern "C" fn random_gate_init_process(_cycle: *mut ngx_cycle_t) -> ngx_int_t {
+    service::init_process();
+    Status::NGX_OK.into()
+}
 
 struct RandomGateRequestHandler;
 

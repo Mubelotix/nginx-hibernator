@@ -1,11 +1,12 @@
 use std::collections::HashMap;
-use std::process::Command;
+use std::sync::mpsc::{self, Sender};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::health;
+use dbus::blocking::Connection;
 use ngx::ffi::{NGX_LOG_ERR, NGX_LOG_NOTICE};
 use ngx::ngx_log_error;
 
@@ -40,9 +41,58 @@ impl ServiceRuntime {
 }
 
 static SERVICE_RUNTIMES: OnceLock<Mutex<HashMap<String, Arc<ServiceRuntime>>>> = OnceLock::new();
+static CONTROLLER_TX: OnceLock<Sender<ControllerCommand>> = OnceLock::new();
+
+enum ControllerAction {
+    Start,
+    Stop,
+}
+
+struct ControllerCommand {
+    action: ControllerAction,
+    service_name: String,
+    reply_tx: Sender<bool>,
+}
 
 fn runtimes() -> &'static Mutex<HashMap<String, Arc<ServiceRuntime>>> {
     SERVICE_RUNTIMES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub fn init_process() {
+    let _ = controller_tx();
+}
+
+fn controller_tx() -> &'static Sender<ControllerCommand> {
+    CONTROLLER_TX.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<ControllerCommand>();
+        thread::spawn(move || {
+            log!("hibernator: internal controller thread started");
+            while let Ok(cmd) = rx.recv() {
+                let ok = match cmd.action {
+                    ControllerAction::Start => run_service_action(ControllerAction::Start, &cmd.service_name),
+                    ControllerAction::Stop => run_service_action(ControllerAction::Stop, &cmd.service_name),
+                };
+                let _ = cmd.reply_tx.send(ok);
+            }
+        });
+        tx
+    })
+}
+
+fn request_service_action(action: ControllerAction, service_name: &str) -> bool {
+    let (reply_tx, reply_rx) = mpsc::channel::<bool>();
+    let cmd = ControllerCommand {
+        action,
+        service_name: service_name.to_owned(),
+        reply_tx,
+    };
+
+    if controller_tx().send(cmd).is_err() {
+        elog!("hibernator: failed to send command to internal controller");
+        return false;
+    }
+
+    reply_rx.recv().unwrap_or(false)
 }
 
 fn runtime_for(service_name: &str) -> Arc<ServiceRuntime> {
@@ -81,7 +131,7 @@ fn spawn_idle_monitor(service_name: String, runtime: Arc<ServiceRuntime>) {
                     service_name,
                     idle
                 );
-                if run_systemctl(&["stop", &service_name]) {
+                if request_service_action(ControllerAction::Stop, &service_name) {
                     runtime.started_by_module.store(false, Ordering::Relaxed);
                 } else {
                     elog!("hibernator: failed to stop service {}", service_name);
@@ -91,28 +141,51 @@ fn spawn_idle_monitor(service_name: String, runtime: Arc<ServiceRuntime>) {
     });
 }
 
-fn run_systemctl(args: &[&str]) -> bool {
-    let direct = Command::new("systemctl")
-        .args(args)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    if direct {
-        return true;
+fn run_service_action(action: ControllerAction, service_name: &str) -> bool {
+    let unit_name = if service_name.ends_with('.') || service_name.contains('.') {
+        service_name.to_owned()
+    } else {
+        format!("{service_name}.service")
+    };
+
+    let Ok(conn) = Connection::new_system() else {
+        elog!("hibernator: failed to connect to system bus");
+        return false;
+    };
+
+    let proxy = conn.with_proxy(
+        "org.freedesktop.systemd1",
+        "/org/freedesktop/systemd1",
+        Duration::from_secs(5),
+    );
+
+    let result = match action {
+        ControllerAction::Start => {
+            proxy.method_call::<(dbus::Path<'static>,), _, _, _>(
+                "org.freedesktop.systemd1.Manager",
+                "StartUnit",
+                (unit_name.as_str(), "replace"),
+            )
+        }
+        ControllerAction::Stop => {
+            proxy.method_call::<(dbus::Path<'static>,), _, _, _>(
+                "org.freedesktop.systemd1.Manager",
+                "StopUnit",
+                (unit_name.as_str(), "replace"),
+            )
+        }
+    };
+
+    if let Err(e) = result {
+        let op = match action {
+            ControllerAction::Start => "start",
+            ControllerAction::Stop => "stop",
+        };
+        elog!("hibernator: failed to {} service {} via dbus: {}", op, service_name, e);
+        return false;
     }
 
-    let sudo_ok = Command::new("sudo")
-        .args(["-n", "systemctl"])
-        .args(args)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-
-    if !sudo_ok {
-        elog!("hibernator: systemctl {:?} failed", args);
-    }
-
-    sudo_ok
+    true
 }
 
 fn now_secs() -> u64 {
@@ -134,7 +207,7 @@ pub fn start_service_and_wait_ready(
     check_interval_ms: u64,
 ) -> bool {
     log!("hibernator: starting service {}", service_name);
-    if !run_systemctl(&["start", service_name]) {
+    if !request_service_action(ControllerAction::Start, service_name) {
         elog!("hibernator: failed to start service {}", service_name);
         return false;
     }
