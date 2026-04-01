@@ -16,6 +16,7 @@ KEEPALIVE_SECS="20"
 STARTUP_DELAY_SECS="5"
 
 NGINX_PID_FILE="$RUNTIME_DIR/nginx.pid"
+NGINX_LOG_FILE="$RUNTIME_DIR/logs/error.log"
 CONF_FILE="$RUNTIME_DIR/nginx.conf"
 BACKEND_ROOT="$RUNTIME_DIR/backend-root"
 SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME.service"
@@ -234,12 +235,20 @@ status() {
   log "test url: http://127.0.0.1:$PROXY_PORT/"
 }
 
+tail_logs() {
+  touch "$NGINX_LOG_FILE"
+  tail -n 0 -F "$NGINX_LOG_FILE" &
+  TAIL_PID="$!"
+}
+
 ensure_prereqs
 write_conf
 provision_backend_service
 stop_backend_service
 start_nginx
 status
+TAIL_PID=""
+tail_logs
 
 log "manual test is ready"
 log "try: curl -i http://127.0.0.1:$PROXY_PORT/"
@@ -247,6 +256,9 @@ log "backend service starts/stops from module logic"
 log "press Ctrl+C to stop nginx and backend service"
 
 cleanup() {
+  if [[ -n "${TAIL_PID:-}" ]] && kill -0 "$TAIL_PID" >/dev/null 2>&1; then
+    kill "$TAIL_PID" >/dev/null 2>&1 || true
+  fi
   stop_one "nginx" "$NGINX_PID_FILE"
   stop_backend_service
 }
