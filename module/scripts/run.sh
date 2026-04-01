@@ -13,7 +13,6 @@ BACKEND_PORT="18081"
 PROXY_PORT="18080"
 SERVICE_NAME="hibernator-demo-backend"
 KEEPALIVE_SECS="20"
-STARTUP_DELAY_SECS="5"
 
 NGINX_PID_FILE="$RUNTIME_DIR/nginx.pid"
 NGINX_LOG_FILE="$RUNTIME_DIR/logs/error.log"
@@ -144,7 +143,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStartPre=/usr/bin/sleep $STARTUP_DELAY_SECS
+ExecStartPre=/usr/bin/sleep 5
 ExecStart=$PYTHON_BIN -m http.server $BACKEND_PORT --bind 127.0.0.1 --directory $BACKEND_ROOT
 WorkingDirectory=$BACKEND_ROOT
 Restart=no
