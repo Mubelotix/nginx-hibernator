@@ -6,6 +6,20 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::health;
+use ngx::ffi::{NGX_LOG_ERR, NGX_LOG_NOTICE};
+use ngx::ngx_log_error;
+
+macro_rules! log {
+    ($($arg:tt)+) => {
+        ngx_log_error!(NGX_LOG_NOTICE, ngx::log::ngx_cycle_log().as_ptr(), $($arg)+);
+    };
+}
+
+macro_rules! elog {
+    ($($arg:tt)+) => {
+        ngx_log_error!(NGX_LOG_ERR, ngx::log::ngx_cycle_log().as_ptr(), $($arg)+);
+    };
+}
 
 struct ServiceRuntime {
     last_activity_secs: AtomicU64,
@@ -62,8 +76,15 @@ fn spawn_idle_monitor(service_name: String, runtime: Arc<ServiceRuntime>) {
             let idle = now.saturating_sub(last);
 
             if idle >= keep_alive {
+                log!(
+                    "hibernator: stopping service {} after {}s of idle time",
+                    service_name,
+                    idle
+                );
                 if run_systemctl(&["stop", &service_name]) {
                     runtime.started_by_module.store(false, Ordering::Relaxed);
+                } else {
+                    elog!("hibernator: failed to stop service {}", service_name);
                 }
             }
         }
@@ -80,12 +101,18 @@ fn run_systemctl(args: &[&str]) -> bool {
         return true;
     }
 
-    Command::new("sudo")
+    let sudo_ok = Command::new("sudo")
         .args(["-n", "systemctl"])
         .args(args)
         .status()
         .map(|s| s.success())
-        .unwrap_or(false)
+        .unwrap_or(false);
+
+    if !sudo_ok {
+        elog!("hibernator: systemctl {:?} failed", args);
+    }
+
+    sudo_ok
 }
 
 fn now_secs() -> u64 {
@@ -106,7 +133,9 @@ pub fn start_service_and_wait_ready(
     timeout_ms: u64,
     check_interval_ms: u64,
 ) -> bool {
+    log!("hibernator: starting service {}", service_name);
     if !run_systemctl(&["start", service_name]) {
+        elog!("hibernator: failed to start service {}", service_name);
         return false;
     }
 
@@ -118,11 +147,13 @@ pub fn start_service_and_wait_ready(
             let rt = runtime_for(service_name);
             rt.started_by_module.store(true, Ordering::Relaxed);
             rt.last_activity_secs.store(now_secs(), Ordering::Relaxed);
+            log!("hibernator: service {} is ready", service_name);
             return true;
         }
         thread::sleep(Duration::from_millis(interval));
     }
 
+    elog!("hibernator: service {} did not become ready in time", service_name);
     false
 }
 
@@ -139,6 +170,10 @@ pub fn start_service_async(service_name: &str, target_port: u16, timeout_ms: u64
     }
 
     thread::spawn(move || {
+        log!(
+            "hibernator: scheduling async start for service {}",
+            service_name_owned
+        );
         let started = start_service_and_wait_ready(
             &service_name_owned,
             target_port,
