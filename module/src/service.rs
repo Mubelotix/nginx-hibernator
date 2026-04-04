@@ -10,6 +10,8 @@ use dbus::blocking::Connection;
 use ngx::ffi::{NGX_LOG_ERR, NGX_LOG_NOTICE};
 use ngx::ngx_log_error;
 
+use crate::config::ServiceCheckMode;
+
 macro_rules! log {
     ($($arg:tt)+) => {
         ngx_log_error!(NGX_LOG_NOTICE, ngx::log::ngx_cycle_log().as_ptr(), $($arg)+);
@@ -203,6 +205,9 @@ pub fn touch_activity(service_name: &str, keep_alive_secs: u64) {
 pub fn start_service_and_wait_ready(
     service_name: &str,
     target_port: u16,
+    check_mode: ServiceCheckMode,
+    ready_endpoint: &str,
+    ready_timeout_ms: u64,
     timeout_ms: u64,
     check_interval_ms: u64,
 ) -> bool {
@@ -216,7 +221,7 @@ pub fn start_service_and_wait_ready(
     let max_checks = timeout_ms.saturating_div(interval).max(1);
 
     for _ in 0..max_checks {
-        if health::is_service_up(target_port) {
+        if health::is_service_up(check_mode, target_port, ready_endpoint, ready_timeout_ms) {
             let rt = runtime_for(service_name);
             rt.started_by_module.store(true, Ordering::Relaxed);
             rt.last_activity_secs.store(now_secs(), Ordering::Relaxed);
@@ -230,8 +235,17 @@ pub fn start_service_and_wait_ready(
     false
 }
 
-pub fn start_service_async(service_name: &str, target_port: u16, timeout_ms: u64, check_interval_ms: u64) {
+pub fn start_service_async(
+    service_name: &str,
+    target_port: u16,
+    check_mode: ServiceCheckMode,
+    ready_endpoint: &str,
+    ready_timeout_ms: u64,
+    timeout_ms: u64,
+    check_interval_ms: u64,
+) {
     let service_name_owned = service_name.to_owned();
+    let ready_endpoint_owned = ready_endpoint.to_owned();
     let rt = runtime_for(&service_name_owned);
 
     if rt
@@ -250,6 +264,9 @@ pub fn start_service_async(service_name: &str, target_port: u16, timeout_ms: u64
         let started = start_service_and_wait_ready(
             &service_name_owned,
             target_port,
+            check_mode,
+            &ready_endpoint_owned,
+            ready_timeout_ms,
             timeout_ms,
             check_interval_ms,
         );

@@ -155,8 +155,22 @@ http {
       # Required when service control is enabled.
       hibernator_service_name simple_python_http;
 
-      # TCP port of the upstream app used by the health check.
-      hibernator_target_port 18081;
+      # TCP port of the upstream app used by the readiness checks.
+      hibernator_check_port 18081;
+
+      # Service readiness check mode.
+      # Values: http | port
+      # Default: http
+      hibernator_check_mode http;
+
+      # HTTP endpoint used by the http readiness checker.
+      # Default: /ready
+      hibernator_check_endpoint /ready;
+
+      # Max time allowed for the service to answer readiness checks.
+      # Used by both http and port check modes.
+      # Default: 100ms
+      hibernator_check_timeout 100ms;
 
       # Keep backend alive after the last qualifying request.
       hibernator_keep_alive 5m;

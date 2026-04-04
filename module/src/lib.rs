@@ -97,7 +97,12 @@ impl RandomGateRequestHandler {
             return serve_landing_page(request, conf.landing_dir.as_deref());
         };
 
-        let is_up = health::is_service_up(target_port);
+        let is_up = health::is_service_up(
+            conf.check_mode,
+            target_port,
+            &conf.check_endpoint,
+            conf.check_timeout_ms,
+        );
         ngx_log_debug_http!(request, "hibernator enabled=1 target_port={} up={}", target_port, is_up);
 
         if !is_up {
@@ -107,6 +112,9 @@ impl RandomGateRequestHandler {
                         service::start_service_async(
                             service_name,
                             target_port,
+                            conf.check_mode,
+                            &conf.check_endpoint,
+                            conf.check_timeout_ms,
                             conf.start_timeout_ms,
                             conf.start_check_interval_ms,
                         );
@@ -120,6 +128,9 @@ impl RandomGateRequestHandler {
                         let started = service::start_service_and_wait_ready(
                             service_name,
                             target_port,
+                            conf.check_mode,
+                            &conf.check_endpoint,
+                            conf.check_timeout_ms,
                             conf.start_timeout_ms,
                             conf.start_check_interval_ms,
                         );

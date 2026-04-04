@@ -122,7 +122,7 @@ http {
         location / {
             hibernator on;
             hibernator_service_name $SERVICE_NAME;
-            hibernator_target_port $BACKEND_PORT;
+            hibernator_check_port $BACKEND_PORT;
             hibernator_keep_alive ${KEEPALIVE_SECS}s;
           hibernator_proxy_mode never;
             hibernator_landing_dir $LANDING_DIR;

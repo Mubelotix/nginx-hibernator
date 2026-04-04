@@ -14,6 +14,18 @@ pub enum ProxyMode {
     Never,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServiceCheckMode {
+    Http,
+    Port,
+}
+
+impl Default for ServiceCheckMode {
+    fn default() -> Self {
+        Self::Http
+    }
+}
+
 impl Default for ProxyMode {
     fn default() -> Self {
         Self::Always
@@ -28,6 +40,9 @@ pub struct ModuleConfig {
     pub keep_alive_secs: u64,
     pub start_timeout_ms: u64,
     pub start_check_interval_ms: u64,
+    pub check_mode: ServiceCheckMode,
+    pub check_endpoint: String,
+    pub check_timeout_ms: u64,
     pub proxy_mode: ProxyMode,
     pub browser_proxy_mode: ProxyMode,
     pub proxy_timeout_ms: u64,
@@ -44,6 +59,9 @@ impl Default for ModuleConfig {
             keep_alive_secs: 5 * 60,
             start_timeout_ms: 5 * 60 * 1000,
             start_check_interval_ms: 100,
+            check_mode: ServiceCheckMode::Http,
+            check_endpoint: "/ready".to_owned(),
+            check_timeout_ms: 100,
             proxy_mode: ProxyMode::Always,
             browser_proxy_mode: ProxyMode::WhenReady,
             proxy_timeout_ms: 28_000,
@@ -77,6 +95,15 @@ impl http::Merge for ModuleConfig {
         if self.start_check_interval_ms == defaults.start_check_interval_ms {
             self.start_check_interval_ms = prev.start_check_interval_ms;
         }
+        if self.check_mode == defaults.check_mode {
+            self.check_mode = prev.check_mode;
+        }
+        if self.check_endpoint == defaults.check_endpoint {
+            self.check_endpoint = prev.check_endpoint.clone();
+        }
+        if self.check_timeout_ms == defaults.check_timeout_ms {
+            self.check_timeout_ms = prev.check_timeout_ms;
+        }
         if self.proxy_mode == defaults.proxy_mode {
             self.proxy_mode = prev.proxy_mode;
         }
@@ -97,7 +124,7 @@ impl http::Merge for ModuleConfig {
     }
 }
 
-pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 12] = [
+pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 15] = [
     ngx_command_t {
         name: ngx_string!("hibernator"),
         type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
@@ -115,7 +142,7 @@ pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 12] = [
         post: core::ptr::null_mut(),
     },
     ngx_command_t {
-        name: ngx_string!("hibernator_target_port"),
+        name: ngx_string!("hibernator_check_port"),
         type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
         set: Some(set_target_port),
         conf: NGX_HTTP_LOC_CONF_OFFSET,
@@ -142,6 +169,30 @@ pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 12] = [
         name: ngx_string!("hibernator_start_check_interval"),
         type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
         set: Some(set_start_check_interval),
+        conf: NGX_HTTP_LOC_CONF_OFFSET,
+        offset: 0,
+        post: core::ptr::null_mut(),
+    },
+    ngx_command_t {
+        name: ngx_string!("hibernator_check_mode"),
+        type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+        set: Some(set_check_mode),
+        conf: NGX_HTTP_LOC_CONF_OFFSET,
+        offset: 0,
+        post: core::ptr::null_mut(),
+    },
+    ngx_command_t {
+        name: ngx_string!("hibernator_check_endpoint"),
+        type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+        set: Some(set_check_endpoint),
+        conf: NGX_HTTP_LOC_CONF_OFFSET,
+        offset: 0,
+        post: core::ptr::null_mut(),
+    },
+    ngx_command_t {
+        name: ngx_string!("hibernator_check_timeout"),
+        type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+        set: Some(set_check_timeout),
         conf: NGX_HTTP_LOC_CONF_OFFSET,
         offset: 0,
         post: core::ptr::null_mut(),
@@ -206,6 +257,16 @@ fn parse_proxy_mode(val: &str) -> Option<ProxyMode> {
         Some(ProxyMode::WhenReady)
     } else if val.eq_ignore_ascii_case("never") {
         Some(ProxyMode::Never)
+    } else {
+        None
+    }
+}
+
+fn parse_service_check_mode(val: &str) -> Option<ServiceCheckMode> {
+    if val.eq_ignore_ascii_case("http") {
+        Some(ServiceCheckMode::Http)
+    } else if val.eq_ignore_ascii_case("port") {
+        Some(ServiceCheckMode::Port)
     } else {
         None
     }
@@ -350,6 +411,51 @@ extern "C" fn set_start_check_interval(cf: *mut ngx_conf_t, _cmd: *mut ngx_comma
     let conf = unsafe { &mut *(conf as *mut ModuleConfig) };
     if let Some(v) = parse_duration_ms(&val) {
         conf.start_check_interval_ms = v;
+        ngx::core::NGX_CONF_OK
+    } else {
+        ngx_conf_log_error!(NGX_LOG_EMERG, cf, "invalid duration value");
+        ngx::core::NGX_CONF_ERROR
+    }
+}
+
+extern "C" fn set_check_mode(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf: *mut c_void) -> *mut c_char {
+    let Ok(val) = arg1(cf) else {
+        return ngx::core::NGX_CONF_ERROR;
+    };
+    let conf = unsafe { &mut *(conf as *mut ModuleConfig) };
+    if let Some(mode) = parse_service_check_mode(&val) {
+        conf.check_mode = mode;
+        ngx::core::NGX_CONF_OK
+    } else {
+        ngx_conf_log_error!(NGX_LOG_EMERG, cf, "invalid service check mode: use `http` or `port`");
+        ngx::core::NGX_CONF_ERROR
+    }
+}
+
+extern "C" fn set_check_endpoint(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf: *mut c_void) -> *mut c_char {
+    let Ok(val) = arg1(cf) else {
+        return ngx::core::NGX_CONF_ERROR;
+    };
+    let conf = unsafe { &mut *(conf as *mut ModuleConfig) };
+    if !val.starts_with('/') {
+        ngx_conf_log_error!(
+            NGX_LOG_EMERG,
+            cf,
+            "invalid service ready endpoint: must start with '/'"
+        );
+        return ngx::core::NGX_CONF_ERROR;
+    }
+    conf.check_endpoint = val;
+    ngx::core::NGX_CONF_OK
+}
+
+extern "C" fn set_check_timeout(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf: *mut c_void) -> *mut c_char {
+    let Ok(val) = arg1(cf) else {
+        return ngx::core::NGX_CONF_ERROR;
+    };
+    let conf = unsafe { &mut *(conf as *mut ModuleConfig) };
+    if let Some(v) = parse_duration_ms(&val) {
+        conf.check_timeout_ms = v;
         ngx::core::NGX_CONF_OK
     } else {
         ngx_conf_log_error!(NGX_LOG_EMERG, cf, "invalid duration value");

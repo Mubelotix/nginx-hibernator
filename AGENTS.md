@@ -2,4 +2,4 @@ To help you complete tasks, you make look-up code in the library. It's available
 
 You may also look into the nginx doc in ./nginx-doc.md (obtained from https://nginx.org/en/docs/dev/development_guide.html).
 
-We don't care about backward-compatibility between changes.
+We don't care about backward-compatibility between changes. However, please keep the ready accurate and up-to-date.
