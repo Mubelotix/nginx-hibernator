@@ -1,11 +1,11 @@
-use std::collections::HashMap;
 use std::sync::mpsc::{self, Sender};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
-use crate::health;
+use crate::check;
+use crate::hibernate;
 use dbus::blocking::Connection;
 use ngx::ffi::{NGX_LOG_ERR, NGX_LOG_NOTICE};
 use ngx::ngx_log_error;
@@ -24,25 +24,19 @@ macro_rules! elog {
     };
 }
 
-struct ServiceRuntime {
-    last_activity_secs: AtomicU64,
-    keep_alive_secs: AtomicU64,
-    started_by_module: AtomicBool,
+struct ServiceStartRuntime {
     starting: AtomicBool,
 }
 
-impl ServiceRuntime {
+impl ServiceStartRuntime {
     fn new() -> Self {
         Self {
-            last_activity_secs: AtomicU64::new(now_secs()),
-            keep_alive_secs: AtomicU64::new(300),
-            started_by_module: AtomicBool::new(false),
             starting: AtomicBool::new(false),
         }
     }
 }
 
-static SERVICE_RUNTIMES: OnceLock<Mutex<HashMap<String, Arc<ServiceRuntime>>>> = OnceLock::new();
+static SERVICE_START_RUNTIMES: OnceLock<Mutex<std::collections::HashMap<String, Arc<ServiceStartRuntime>>>> = OnceLock::new();
 static CONTROLLER_TX: OnceLock<Sender<ControllerCommand>> = OnceLock::new();
 
 enum ControllerAction {
@@ -56,8 +50,8 @@ struct ControllerCommand {
     reply_tx: Sender<bool>,
 }
 
-fn runtimes() -> &'static Mutex<HashMap<String, Arc<ServiceRuntime>>> {
-    SERVICE_RUNTIMES.get_or_init(|| Mutex::new(HashMap::new()))
+fn start_runtimes() -> &'static Mutex<std::collections::HashMap<String, Arc<ServiceStartRuntime>>> {
+    SERVICE_START_RUNTIMES.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
 }
 
 pub fn init_process() {
@@ -97,50 +91,15 @@ fn request_service_action(action: ControllerAction, service_name: &str) -> bool 
     reply_rx.recv().unwrap_or(false)
 }
 
-fn runtime_for(service_name: &str) -> Arc<ServiceRuntime> {
-    let mut map = runtimes().lock().expect("service runtime lock poisoned");
+fn start_runtime_for(service_name: &str) -> Arc<ServiceStartRuntime> {
+    let mut map = start_runtimes().lock().expect("service start runtime lock poisoned");
     if let Some(existing) = map.get(service_name) {
         return Arc::clone(existing);
     }
 
-    let runtime = Arc::new(ServiceRuntime::new());
-    spawn_idle_monitor(service_name.to_owned(), Arc::clone(&runtime));
+    let runtime = Arc::new(ServiceStartRuntime::new());
     map.insert(service_name.to_owned(), Arc::clone(&runtime));
     runtime
-}
-
-fn spawn_idle_monitor(service_name: String, runtime: Arc<ServiceRuntime>) {
-    thread::spawn(move || {
-        loop {
-            thread::sleep(Duration::from_secs(1));
-
-            if !runtime.started_by_module.load(Ordering::Relaxed) {
-                continue;
-            }
-
-            let keep_alive = runtime.keep_alive_secs.load(Ordering::Relaxed);
-            if keep_alive == 0 {
-                continue;
-            }
-
-            let now = now_secs();
-            let last = runtime.last_activity_secs.load(Ordering::Relaxed);
-            let idle = now.saturating_sub(last);
-
-            if idle >= keep_alive {
-                log!(
-                    "hibernator: stopping service {} after {}s of idle time",
-                    service_name,
-                    idle
-                );
-                if request_service_action(ControllerAction::Stop, &service_name) {
-                    runtime.started_by_module.store(false, Ordering::Relaxed);
-                } else {
-                    elog!("hibernator: failed to stop service {}", service_name);
-                }
-            }
-        }
-    });
 }
 
 fn run_service_action(action: ControllerAction, service_name: &str) -> bool {
@@ -190,16 +149,8 @@ fn run_service_action(action: ControllerAction, service_name: &str) -> bool {
     true
 }
 
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0_u64, |d| d.as_secs())
-}
-
-pub fn touch_activity(service_name: &str, keep_alive_secs: u64) {
-    let rt = runtime_for(service_name);
-    rt.keep_alive_secs.store(keep_alive_secs, Ordering::Relaxed);
-    rt.last_activity_secs.store(now_secs(), Ordering::Relaxed);
+pub fn stop_service(service_name: &str) -> bool {
+    request_service_action(ControllerAction::Stop, service_name)
 }
 
 pub fn start_service_async(
@@ -213,7 +164,7 @@ pub fn start_service_async(
 ) {
     let service_name_owned = service_name.to_owned();
     let ready_endpoint_owned = ready_endpoint.to_owned();
-    let rt = runtime_for(&service_name_owned);
+    let rt = start_runtime_for(&service_name_owned);
 
     if rt
         .starting
@@ -239,13 +190,11 @@ pub fn start_service_async(
         );
 
         if started {
-            health::set_service_up(&service_name_owned, true);
-            let runtime = runtime_for(&service_name_owned);
-            runtime.started_by_module.store(true, Ordering::Relaxed);
-            runtime.last_activity_secs.store(now_secs(), Ordering::Relaxed);
+            check::set_service_up(&service_name_owned, true);
+            hibernate::mark_service_started(&service_name_owned);
         }
 
-        let runtime = runtime_for(&service_name_owned);
+        let runtime = start_runtime_for(&service_name_owned);
         runtime.starting.store(false, Ordering::Release);
     });
 }
@@ -269,10 +218,8 @@ fn start_service_and_wait_ready_inner(
     let max_checks = timeout_ms.saturating_div(interval).max(1);
 
     for _ in 0..max_checks {
-        if health::is_service_up(check_mode, target_port, ready_endpoint, ready_timeout_ms) {
-            let rt = runtime_for(service_name);
-            rt.started_by_module.store(true, Ordering::Relaxed);
-            rt.last_activity_secs.store(now_secs(), Ordering::Relaxed);
+        if check::is_service_up(check_mode, target_port, ready_endpoint, ready_timeout_ms) {
+            hibernate::mark_service_started(service_name);
             log!("hibernator: service {} is ready", service_name);
             return true;
         }

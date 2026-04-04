@@ -13,7 +13,8 @@ use ngx::http::{self, HttpModule, HttpModuleLocationConf, Request};
 use ngx::{ngx_conf_log_error, ngx_log_debug_http};
 
 mod config;
-mod health;
+mod check;
+mod hibernate;
 mod service;
 use config::ModuleConfig;
 
@@ -89,7 +90,7 @@ impl RandomGateRequestHandler {
         }
 
         if let Some(service_name) = conf.service_name.as_deref() {
-            service::touch_activity(service_name, conf.keep_alive_secs);
+            hibernate::touch_activity(service_name, conf.keep_alive_secs);
         }
 
         let Some(target_port) = conf.target_port else {
@@ -102,7 +103,7 @@ impl RandomGateRequestHandler {
             .clone()
             .unwrap_or_else(|| format!("{}:{}", target_port, conf.check_endpoint));
 
-        health::ensure_service_health_monitor(
+        check::ensure_service_health_monitor(
             &health_service_id,
             conf.check_mode,
             target_port,
@@ -112,7 +113,7 @@ impl RandomGateRequestHandler {
             conf.down_check_interval_ms,
         );
 
-        let is_up = health::is_service_up_cached(&health_service_id);
+        let is_up = check::is_service_up_cached(&health_service_id);
         ngx_log_debug_http!(request, "hibernator enabled=1 target_port={} up={}", target_port, is_up);
 
         if !is_up {
