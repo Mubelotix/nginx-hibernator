@@ -89,6 +89,7 @@ fn spawn_idle_monitor(service_name: String, runtime: Arc<HibernateRuntime>) {
                 idle
             );
             if crate::service::stop_service(&service_name) {
+                crate::check::set_service_up(&service_name, false);
                 runtime.started_by_module.store(false, Ordering::Relaxed);
             } else {
                 elog!("hibernator: failed to stop service {}", service_name);
