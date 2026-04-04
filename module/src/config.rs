@@ -8,13 +8,6 @@ use ngx::http::{self, MergeConfigError};
 use ngx::{ngx_conf_log_error, ngx_string};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProxyMode {
-    Always,
-    WhenReady,
-    Never,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServiceCheckMode {
     Http,
     Port,
@@ -23,12 +16,6 @@ pub enum ServiceCheckMode {
 impl Default for ServiceCheckMode {
     fn default() -> Self {
         Self::Http
-    }
-}
-
-impl Default for ProxyMode {
-    fn default() -> Self {
-        Self::Always
     }
 }
 
@@ -45,10 +32,6 @@ pub struct ModuleConfig {
     pub check_timeout_ms: u64,
     pub up_check_interval_ms: u64,
     pub down_check_interval_ms: u64,
-    pub proxy_mode: ProxyMode,
-    pub browser_proxy_mode: ProxyMode,
-    pub proxy_timeout_ms: u64,
-    pub proxy_check_interval_ms: u64,
     pub landing_dir: Option<String>,
 }
 
@@ -66,10 +49,6 @@ impl Default for ModuleConfig {
             check_timeout_ms: 100,
             up_check_interval_ms: 10_000,
             down_check_interval_ms: 60_000,
-            proxy_mode: ProxyMode::Always,
-            browser_proxy_mode: ProxyMode::WhenReady,
-            proxy_timeout_ms: 28_000,
-            proxy_check_interval_ms: 500,
             landing_dir: None,
         }
     }
@@ -114,18 +93,6 @@ impl http::Merge for ModuleConfig {
         if self.down_check_interval_ms == defaults.down_check_interval_ms {
             self.down_check_interval_ms = prev.down_check_interval_ms;
         }
-        if self.proxy_mode == defaults.proxy_mode {
-            self.proxy_mode = prev.proxy_mode;
-        }
-        if self.browser_proxy_mode == defaults.browser_proxy_mode {
-            self.browser_proxy_mode = prev.browser_proxy_mode;
-        }
-        if self.proxy_timeout_ms == defaults.proxy_timeout_ms {
-            self.proxy_timeout_ms = prev.proxy_timeout_ms;
-        }
-        if self.proxy_check_interval_ms == defaults.proxy_check_interval_ms {
-            self.proxy_check_interval_ms = prev.proxy_check_interval_ms;
-        }
         if self.landing_dir.is_none() {
             self.landing_dir = prev.landing_dir.clone();
         }
@@ -134,7 +101,7 @@ impl http::Merge for ModuleConfig {
     }
 }
 
-pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 17] = [
+pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 13] = [
     ngx_command_t {
         name: ngx_string!("hibernator"),
         type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
@@ -224,38 +191,6 @@ pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 17] = [
         post: core::ptr::null_mut(),
     },
     ngx_command_t {
-        name: ngx_string!("hibernator_proxy_mode"),
-        type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
-        set: Some(set_proxy_mode),
-        conf: NGX_HTTP_LOC_CONF_OFFSET,
-        offset: 0,
-        post: core::ptr::null_mut(),
-    },
-    ngx_command_t {
-        name: ngx_string!("hibernator_browser_proxy_mode"),
-        type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
-        set: Some(set_browser_proxy_mode),
-        conf: NGX_HTTP_LOC_CONF_OFFSET,
-        offset: 0,
-        post: core::ptr::null_mut(),
-    },
-    ngx_command_t {
-        name: ngx_string!("hibernator_proxy_timeout"),
-        type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
-        set: Some(set_proxy_timeout),
-        conf: NGX_HTTP_LOC_CONF_OFFSET,
-        offset: 0,
-        post: core::ptr::null_mut(),
-    },
-    ngx_command_t {
-        name: ngx_string!("hibernator_proxy_check_interval"),
-        type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
-        set: Some(set_proxy_check_interval),
-        conf: NGX_HTTP_LOC_CONF_OFFSET,
-        offset: 0,
-        post: core::ptr::null_mut(),
-    },
-    ngx_command_t {
         name: ngx_string!("hibernator_landing_dir"),
         type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
         set: Some(set_landing_dir),
@@ -271,18 +206,6 @@ fn parse_on_off(val: &str) -> Option<bool> {
         Some(true)
     } else if val.eq_ignore_ascii_case("off") {
         Some(false)
-    } else {
-        None
-    }
-}
-
-fn parse_proxy_mode(val: &str) -> Option<ProxyMode> {
-    if val.eq_ignore_ascii_case("always") {
-        Some(ProxyMode::Always)
-    } else if val.eq_ignore_ascii_case("when_ready") || val.eq_ignore_ascii_case("when-ready") || val.eq_ignore_ascii_case("ready") {
-        Some(ProxyMode::WhenReady)
-    } else if val.eq_ignore_ascii_case("never") {
-        Some(ProxyMode::Never)
     } else {
         None
     }
@@ -510,52 +433,6 @@ extern "C" fn set_down_check_interval(cf: *mut ngx_conf_t, _cmd: *mut ngx_comman
     let conf = unsafe { &mut *(conf as *mut ModuleConfig) };
     if let Some(v) = parse_duration_ms(&val) {
         conf.down_check_interval_ms = v;
-        ngx::core::NGX_CONF_OK
-    } else {
-        ngx_conf_log_error!(NGX_LOG_EMERG, cf, "invalid duration value");
-        ngx::core::NGX_CONF_ERROR
-    }
-}
-
-extern "C" fn set_proxy_mode(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf: *mut c_void) -> *mut c_char {
-    let Ok(val) = arg1(cf) else {
-        return ngx::core::NGX_CONF_ERROR;
-    };
-    let conf = unsafe { &mut *(conf as *mut ModuleConfig) };
-    if let Some(mode) = parse_proxy_mode(&val) {
-        conf.proxy_mode = mode;
-        ngx::core::NGX_CONF_OK
-    } else {
-        ngx_conf_log_error!(NGX_LOG_EMERG, cf, "invalid proxy mode");
-        ngx::core::NGX_CONF_ERROR
-    }
-}
-
-extern "C" fn set_browser_proxy_mode(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf: *mut c_void) -> *mut c_char {
-    set_proxy_mode(cf, _cmd, conf)
-}
-
-extern "C" fn set_proxy_timeout(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf: *mut c_void) -> *mut c_char {
-    let Ok(val) = arg1(cf) else {
-        return ngx::core::NGX_CONF_ERROR;
-    };
-    let conf = unsafe { &mut *(conf as *mut ModuleConfig) };
-    if let Some(v) = parse_duration_ms(&val) {
-        conf.proxy_timeout_ms = v;
-        ngx::core::NGX_CONF_OK
-    } else {
-        ngx_conf_log_error!(NGX_LOG_EMERG, cf, "invalid duration value");
-        ngx::core::NGX_CONF_ERROR
-    }
-}
-
-extern "C" fn set_proxy_check_interval(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf: *mut c_void) -> *mut c_char {
-    let Ok(val) = arg1(cf) else {
-        return ngx::core::NGX_CONF_ERROR;
-    };
-    let conf = unsafe { &mut *(conf as *mut ModuleConfig) };
-    if let Some(v) = parse_duration_ms(&val) {
-        conf.proxy_check_interval_ms = v;
         ngx::core::NGX_CONF_OK
     } else {
         ngx_conf_log_error!(NGX_LOG_EMERG, cf, "invalid duration value");

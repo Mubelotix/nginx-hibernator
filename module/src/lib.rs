@@ -113,8 +113,15 @@ impl RandomGateRequestHandler {
             conf.down_check_interval_ms,
         );
 
+        // Request routing must stay fast and non-blocking: use only cached state here.
+        // Do not add synchronous health checks on this path.
         let is_up = check::is_service_up_cached(&health_service_id);
-        ngx_log_debug_http!(request, "hibernator enabled=1 target_port={} up={}", target_port, is_up);
+        ngx_log_debug_http!(
+            request,
+            "hibernator enabled=1 target_port={} up={}",
+            target_port,
+            is_up
+        );
 
         if !is_up {
             if let Some(service_name) = conf.service_name.as_deref() {
@@ -129,9 +136,8 @@ impl RandomGateRequestHandler {
                 );
                 ngx_log_debug_http!(
                     request,
-                    "hibernator start scheduled service={} proxy_mode={:?}",
-                    service_name,
-                    conf.proxy_mode
+                    "hibernator start scheduled service={}",
+                    service_name
                 );
             }
             serve_landing_page(request, conf.landing_dir.as_deref())

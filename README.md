@@ -189,19 +189,6 @@ http {
       # Poll interval while waiting for service startup.
       hibernator_start_check_interval 100ms;
 
-      # Request proxy behavior while service is waking.
-      # Values: always | when_ready | never
-      hibernator_proxy_mode always;
-
-      # Same as above but for browser-originated requests.
-      hibernator_browser_proxy_mode when_ready;
-
-      # Max time to keep a proxied request open while waiting.
-      hibernator_proxy_timeout 28s;
-
-      # Poll interval used by proxy readiness checks.
-      hibernator_proxy_check_interval 500ms;
-
       # Folder containing landing page files (index + assets).
       hibernator_landing_dir /var/www/nginx-hibernator/landing;
 
