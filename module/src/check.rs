@@ -19,6 +19,17 @@ struct ServiceHealthRuntime {
     monitor_started: AtomicBool,
 }
 
+#[derive(Clone)]
+struct ServiceMonitorConfig {
+    service_id: String,
+    mode: ServiceCheckMode,
+    port: u16,
+    endpoint: String,
+    timeout_ms: u64,
+    up_check_interval_ms: u64,
+    down_check_interval_ms: u64,
+}
+
 impl ServiceHealthRuntime {
     fn new() -> Self {
         Self {
@@ -35,9 +46,14 @@ impl ServiceHealthRuntime {
 }
 
 static SERVICE_HEALTHS: OnceLock<Mutex<HashMap<String, Arc<ServiceHealthRuntime>>>> = OnceLock::new();
+static REGISTERED_MONITORS: OnceLock<Mutex<HashMap<String, ServiceMonitorConfig>>> = OnceLock::new();
 
 fn healths() -> &'static Mutex<HashMap<String, Arc<ServiceHealthRuntime>>> {
     SERVICE_HEALTHS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn registered_monitors() -> &'static Mutex<HashMap<String, ServiceMonitorConfig>> {
+    REGISTERED_MONITORS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn runtime_for(service_id: &str) -> Arc<ServiceHealthRuntime> {
@@ -61,6 +77,27 @@ pub fn ensure_service_health_monitor(
     down_check_interval_ms: u64,
 ) {
     let runtime = runtime_for(service_id);
+    apply_health_runtime_config(
+        &runtime,
+        mode,
+        port,
+        endpoint,
+        timeout_ms,
+        up_check_interval_ms,
+        down_check_interval_ms,
+    );
+    start_health_monitor_if_needed(&runtime);
+}
+
+fn apply_health_runtime_config(
+    runtime: &Arc<ServiceHealthRuntime>,
+    mode: ServiceCheckMode,
+    port: u16,
+    endpoint: &str,
+    timeout_ms: u64,
+    up_check_interval_ms: u64,
+    down_check_interval_ms: u64,
+) {
     runtime.mode.store(mode_to_u8(mode), Ordering::Relaxed);
     runtime.port.store(port, Ordering::Relaxed);
     runtime.timeout_ms.store(timeout_ms.max(1), Ordering::Relaxed);
@@ -75,13 +112,75 @@ pub fn ensure_service_health_monitor(
         ep.clear();
         ep.push_str(endpoint);
     }
+}
 
+fn start_health_monitor_if_needed(runtime: &Arc<ServiceHealthRuntime>) {
     if runtime
         .monitor_started
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
         .is_ok()
     {
-        spawn_health_monitor(Arc::clone(&runtime));
+        let runtime = Arc::clone(runtime);
+        thread::spawn(move || loop {
+            refresh_service_health(&runtime);
+
+            let is_up = runtime.is_up.load(Ordering::Relaxed);
+            let interval_ms = if is_up {
+                runtime.up_check_interval_ms.load(Ordering::Relaxed)
+            } else {
+                runtime.down_check_interval_ms.load(Ordering::Relaxed)
+            }
+            .max(1);
+
+            thread::sleep(Duration::from_millis(interval_ms));
+        });
+    }
+}
+
+pub fn register_service_health_monitor(
+    service_id: &str,
+    mode: ServiceCheckMode,
+    port: u16,
+    endpoint: &str,
+    timeout_ms: u64,
+    up_check_interval_ms: u64,
+    down_check_interval_ms: u64,
+) {
+    let mut map = registered_monitors()
+        .lock()
+        .expect("registered monitor lock poisoned");
+    map.insert(
+        service_id.to_owned(),
+        ServiceMonitorConfig {
+            service_id: service_id.to_owned(),
+            mode,
+            port,
+            endpoint: endpoint.to_owned(),
+            timeout_ms,
+            up_check_interval_ms,
+            down_check_interval_ms,
+        },
+    );
+}
+
+pub fn start_registered_service_health_monitors() {
+    let configs: Vec<ServiceMonitorConfig> = {
+        let map = registered_monitors()
+            .lock()
+            .expect("registered monitor lock poisoned");
+        map.values().cloned().collect()
+    };
+
+    for cfg in configs {
+        ensure_service_health_monitor(
+            &cfg.service_id,
+            cfg.mode,
+            cfg.port,
+            &cfg.endpoint,
+            cfg.timeout_ms,
+            cfg.up_check_interval_ms,
+            cfg.down_check_interval_ms,
+        );
     }
 }
 
@@ -95,22 +194,6 @@ pub fn is_service_up_cached(service_id: &str) -> bool {
 pub fn set_service_up(service_id: &str, is_up: bool) {
     let runtime = runtime_for(service_id);
     runtime.is_up.store(is_up, Ordering::Relaxed);
-}
-
-fn spawn_health_monitor(runtime: Arc<ServiceHealthRuntime>) {
-    thread::spawn(move || loop {
-        refresh_service_health(&runtime);
-
-        let is_up = runtime.is_up.load(Ordering::Relaxed);
-        let interval_ms = if is_up {
-            runtime.up_check_interval_ms.load(Ordering::Relaxed)
-        } else {
-            runtime.down_check_interval_ms.load(Ordering::Relaxed)
-        }
-        .max(1);
-
-        thread::sleep(Duration::from_millis(interval_ms));
-    });
 }
 
 fn refresh_service_health(runtime: &ServiceHealthRuntime) {

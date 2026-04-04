@@ -68,6 +68,7 @@ pub static mut ngx_http_random_gate_module: ngx_module_t = ngx_module_t {
 
 unsafe extern "C" fn random_gate_init_process(_cycle: *mut ngx_cycle_t) -> ngx_int_t {
     service::init_process();
+    check::start_registered_service_health_monitors();
     Status::NGX_OK.into()
 }
 
