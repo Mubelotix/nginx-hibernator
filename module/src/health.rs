@@ -1,8 +1,145 @@
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::thread;
 use std::time::Duration;
 
 use crate::config::ServiceCheckMode;
+
+struct ServiceHealthRuntime {
+    mode: AtomicU8,
+    port: AtomicU16,
+    timeout_ms: AtomicU64,
+    up_check_interval_ms: AtomicU64,
+    down_check_interval_ms: AtomicU64,
+    endpoint: Mutex<String>,
+    is_up: AtomicBool,
+    monitor_started: AtomicBool,
+}
+
+impl ServiceHealthRuntime {
+    fn new() -> Self {
+        Self {
+            mode: AtomicU8::new(mode_to_u8(ServiceCheckMode::Http)),
+            port: AtomicU16::new(0),
+            timeout_ms: AtomicU64::new(100),
+            up_check_interval_ms: AtomicU64::new(10_000),
+            down_check_interval_ms: AtomicU64::new(60_000),
+            endpoint: Mutex::new("/ready".to_owned()),
+            is_up: AtomicBool::new(false),
+            monitor_started: AtomicBool::new(false),
+        }
+    }
+}
+
+static SERVICE_HEALTHS: OnceLock<Mutex<HashMap<String, Arc<ServiceHealthRuntime>>>> = OnceLock::new();
+
+fn healths() -> &'static Mutex<HashMap<String, Arc<ServiceHealthRuntime>>> {
+    SERVICE_HEALTHS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn runtime_for(service_id: &str) -> Arc<ServiceHealthRuntime> {
+    let mut map = healths().lock().expect("service health lock poisoned");
+    if let Some(existing) = map.get(service_id) {
+        return Arc::clone(existing);
+    }
+
+    let runtime = Arc::new(ServiceHealthRuntime::new());
+    map.insert(service_id.to_owned(), Arc::clone(&runtime));
+    runtime
+}
+
+pub fn ensure_service_health_monitor(
+    service_id: &str,
+    mode: ServiceCheckMode,
+    port: u16,
+    endpoint: &str,
+    timeout_ms: u64,
+    up_check_interval_ms: u64,
+    down_check_interval_ms: u64,
+) {
+    let runtime = runtime_for(service_id);
+    runtime.mode.store(mode_to_u8(mode), Ordering::Relaxed);
+    runtime.port.store(port, Ordering::Relaxed);
+    runtime.timeout_ms.store(timeout_ms.max(1), Ordering::Relaxed);
+    runtime
+        .up_check_interval_ms
+        .store(up_check_interval_ms.max(1), Ordering::Relaxed);
+    runtime
+        .down_check_interval_ms
+        .store(down_check_interval_ms.max(1), Ordering::Relaxed);
+
+    if let Ok(mut ep) = runtime.endpoint.lock() {
+        ep.clear();
+        ep.push_str(endpoint);
+    }
+
+    if runtime
+        .monitor_started
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_ok()
+    {
+        spawn_health_monitor(Arc::clone(&runtime));
+    }
+}
+
+pub fn is_service_up_cached(service_id: &str) -> bool {
+    let map = healths().lock().expect("service health lock poisoned");
+    map.get(service_id)
+        .map(|runtime| runtime.is_up.load(Ordering::Relaxed))
+        .unwrap_or(false)
+}
+
+pub fn set_service_up(service_id: &str, is_up: bool) {
+    let runtime = runtime_for(service_id);
+    runtime.is_up.store(is_up, Ordering::Relaxed);
+}
+
+fn spawn_health_monitor(runtime: Arc<ServiceHealthRuntime>) {
+    thread::spawn(move || loop {
+        refresh_service_health(&runtime);
+
+        let is_up = runtime.is_up.load(Ordering::Relaxed);
+        let interval_ms = if is_up {
+            runtime.up_check_interval_ms.load(Ordering::Relaxed)
+        } else {
+            runtime.down_check_interval_ms.load(Ordering::Relaxed)
+        }
+        .max(1);
+
+        thread::sleep(Duration::from_millis(interval_ms));
+    });
+}
+
+fn refresh_service_health(runtime: &ServiceHealthRuntime) {
+    let mode = mode_from_u8(runtime.mode.load(Ordering::Relaxed));
+    let port = runtime.port.load(Ordering::Relaxed);
+    let timeout_ms = runtime.timeout_ms.load(Ordering::Relaxed).max(1);
+    let endpoint = runtime
+        .endpoint
+        .lock()
+        .map(|ep| ep.clone())
+        .unwrap_or_else(|_| "/ready".to_owned());
+
+    let is_up = is_service_up(mode, port, &endpoint, timeout_ms);
+    runtime.is_up.store(is_up, Ordering::Relaxed);
+}
+
+fn mode_to_u8(mode: ServiceCheckMode) -> u8 {
+    match mode {
+        ServiceCheckMode::Http => 0,
+        ServiceCheckMode::Port => 1,
+    }
+}
+
+fn mode_from_u8(mode: u8) -> ServiceCheckMode {
+    match mode {
+        1 => ServiceCheckMode::Port,
+        _ => ServiceCheckMode::Http,
+    }
+}
 
 pub fn is_service_up(mode: ServiceCheckMode, port: u16, endpoint: &str, timeout_ms: u64) -> bool {
     match mode {

@@ -202,7 +202,55 @@ pub fn touch_activity(service_name: &str, keep_alive_secs: u64) {
     rt.last_activity_secs.store(now_secs(), Ordering::Relaxed);
 }
 
-pub fn start_service_and_wait_ready(
+pub fn start_service_async(
+    service_name: &str,
+    target_port: u16,
+    check_mode: ServiceCheckMode,
+    ready_endpoint: &str,
+    ready_timeout_ms: u64,
+    timeout_ms: u64,
+    check_interval_ms: u64,
+) {
+    let service_name_owned = service_name.to_owned();
+    let ready_endpoint_owned = ready_endpoint.to_owned();
+    let rt = runtime_for(&service_name_owned);
+
+    if rt
+        .starting
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_err()
+    {
+        return;
+    }
+
+    thread::spawn(move || {
+        log!(
+            "hibernator: scheduling async start for service {}",
+            service_name_owned
+        );
+        let started = start_service_and_wait_ready_inner(
+            &service_name_owned,
+            target_port,
+            check_mode,
+            &ready_endpoint_owned,
+            ready_timeout_ms,
+            timeout_ms,
+            check_interval_ms,
+        );
+
+        if started {
+            health::set_service_up(&service_name_owned, true);
+            let runtime = runtime_for(&service_name_owned);
+            runtime.started_by_module.store(true, Ordering::Relaxed);
+            runtime.last_activity_secs.store(now_secs(), Ordering::Relaxed);
+        }
+
+        let runtime = runtime_for(&service_name_owned);
+        runtime.starting.store(false, Ordering::Release);
+    });
+}
+
+fn start_service_and_wait_ready_inner(
     service_name: &str,
     target_port: u16,
     check_mode: ServiceCheckMode,
@@ -233,51 +281,4 @@ pub fn start_service_and_wait_ready(
 
     elog!("hibernator: service {} did not become ready in time", service_name);
     false
-}
-
-pub fn start_service_async(
-    service_name: &str,
-    target_port: u16,
-    check_mode: ServiceCheckMode,
-    ready_endpoint: &str,
-    ready_timeout_ms: u64,
-    timeout_ms: u64,
-    check_interval_ms: u64,
-) {
-    let service_name_owned = service_name.to_owned();
-    let ready_endpoint_owned = ready_endpoint.to_owned();
-    let rt = runtime_for(&service_name_owned);
-
-    if rt
-        .starting
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
-        .is_err()
-    {
-        return;
-    }
-
-    thread::spawn(move || {
-        log!(
-            "hibernator: scheduling async start for service {}",
-            service_name_owned
-        );
-        let started = start_service_and_wait_ready(
-            &service_name_owned,
-            target_port,
-            check_mode,
-            &ready_endpoint_owned,
-            ready_timeout_ms,
-            timeout_ms,
-            check_interval_ms,
-        );
-
-        if started {
-            let runtime = runtime_for(&service_name_owned);
-            runtime.started_by_module.store(true, Ordering::Relaxed);
-            runtime.last_activity_secs.store(now_secs(), Ordering::Relaxed);
-        }
-
-        let runtime = runtime_for(&service_name_owned);
-        runtime.starting.store(false, Ordering::Release);
-    });
 }

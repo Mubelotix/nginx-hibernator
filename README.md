@@ -172,6 +172,14 @@ http {
       # Default: 100ms
       hibernator_check_timeout 100ms;
 
+      # Background health monitor interval while the service is up.
+      # Default: 10s
+      hibernator_up_check_interval 10s;
+
+      # Background health monitor interval while the service is down.
+      # Default: 60s
+      hibernator_down_check_interval 60s;
+
       # Keep backend alive after the last qualifying request.
       hibernator_keep_alive 5m;
 

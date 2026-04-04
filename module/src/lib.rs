@@ -15,7 +15,7 @@ use ngx::{ngx_conf_log_error, ngx_log_debug_http};
 mod config;
 mod health;
 mod service;
-use config::{ModuleConfig, ProxyMode};
+use config::ModuleConfig;
 
 const DEFAULT_LANDING_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Service starting</title><style>body{font-family:system-ui,Segoe UI,sans-serif;margin:40px;color:#222}main{max-width:680px}h1{font-size:1.6rem;margin-bottom:.4rem}p{line-height:1.45}</style></head><body><main><h1>Service is waking up</h1><p>The upstream service is currently hibernated and is being started.</p><p>Please refresh in a few seconds.</p></main></body></html>";
 const LANDING_PREFIX: &str = "/hibernator-landing/";
@@ -97,55 +97,41 @@ impl RandomGateRequestHandler {
             return serve_landing_page(request, conf.landing_dir.as_deref());
         };
 
-        let is_up = health::is_service_up(
+        let health_service_id = conf
+            .service_name
+            .clone()
+            .unwrap_or_else(|| format!("{}:{}", target_port, conf.check_endpoint));
+
+        health::ensure_service_health_monitor(
+            &health_service_id,
             conf.check_mode,
             target_port,
             &conf.check_endpoint,
             conf.check_timeout_ms,
+            conf.up_check_interval_ms,
+            conf.down_check_interval_ms,
         );
+
+        let is_up = health::is_service_up_cached(&health_service_id);
         ngx_log_debug_http!(request, "hibernator enabled=1 target_port={} up={}", target_port, is_up);
 
         if !is_up {
             if let Some(service_name) = conf.service_name.as_deref() {
-                match conf.proxy_mode {
-                    ProxyMode::Never => {
-                        service::start_service_async(
-                            service_name,
-                            target_port,
-                            conf.check_mode,
-                            &conf.check_endpoint,
-                            conf.check_timeout_ms,
-                            conf.start_timeout_ms,
-                            conf.start_check_interval_ms,
-                        );
-                        ngx_log_debug_http!(
-                            request,
-                            "hibernator start scheduled service={} proxy_mode=never",
-                            service_name
-                        );
-                    }
-                    _ => {
-                        let started = service::start_service_and_wait_ready(
-                            service_name,
-                            target_port,
-                            conf.check_mode,
-                            &conf.check_endpoint,
-                            conf.check_timeout_ms,
-                            conf.start_timeout_ms,
-                            conf.start_check_interval_ms,
-                        );
-                        ngx_log_debug_http!(
-                            request,
-                            "hibernator start attempted service={} success={}",
-                            service_name,
-                            started
-                        );
-                        if started {
-                            service::touch_activity(service_name, conf.keep_alive_secs);
-                            return Status::NGX_DECLINED;
-                        }
-                    }
-                }
+                service::start_service_async(
+                    service_name,
+                    target_port,
+                    conf.check_mode,
+                    &conf.check_endpoint,
+                    conf.check_timeout_ms,
+                    conf.start_timeout_ms,
+                    conf.start_check_interval_ms,
+                );
+                ngx_log_debug_http!(
+                    request,
+                    "hibernator start scheduled service={} proxy_mode={:?}",
+                    service_name,
+                    conf.proxy_mode
+                );
             }
             serve_landing_page(request, conf.landing_dir.as_deref())
         } else {
