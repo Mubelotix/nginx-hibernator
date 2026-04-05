@@ -10,6 +10,34 @@ use tokio::time::{sleep, timeout};
 
 use crate::config::ServiceCheckMode;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ServiceHealthState {
+    Unknown,
+    Up,
+    Down,
+    Starting,
+}
+
+impl ServiceHealthState {
+    fn as_u8(self) -> u8 {
+        match self {
+            ServiceHealthState::Unknown => 0,
+            ServiceHealthState::Up => 1,
+            ServiceHealthState::Down => 2,
+            ServiceHealthState::Starting => 3,
+        }
+    }
+
+    fn from_u8(value: u8) -> Self {
+        match value {
+            1 => ServiceHealthState::Up,
+            2 => ServiceHealthState::Down,
+            3 => ServiceHealthState::Starting,
+            _ => ServiceHealthState::Unknown,
+        }
+    }
+}
+
 struct ServiceHealthRuntime {
     mode: AtomicU8,
     port: AtomicU16,
@@ -17,7 +45,7 @@ struct ServiceHealthRuntime {
     up_check_interval_ms: AtomicU64,
     down_check_interval_ms: AtomicU64,
     endpoint: Mutex<String>,
-    is_up: AtomicBool,
+    state: AtomicU8,
 }
 
 #[derive(Clone)]
@@ -40,8 +68,16 @@ impl ServiceHealthRuntime {
             up_check_interval_ms: AtomicU64::new(10_000),
             down_check_interval_ms: AtomicU64::new(60_000),
             endpoint: Mutex::new("/ready".to_owned()),
-            is_up: AtomicBool::new(false),
+            state: AtomicU8::new(ServiceHealthState::Unknown.as_u8()),
         }
+    }
+
+    fn state(&self) -> ServiceHealthState {
+        ServiceHealthState::from_u8(self.state.load(Ordering::Relaxed))
+    }
+
+    fn set_state(&self, state: ServiceHealthState) {
+        self.state.store(state.as_u8(), Ordering::Relaxed);
     }
 }
 
@@ -137,9 +173,16 @@ fn start_health_monitor_task_if_needed() {
 async fn monitor_service_health(runtime: Arc<ServiceHealthRuntime>) {
     loop {
         let is_up = refresh_service_health_async(&runtime).await;
-        runtime.is_up.store(is_up, Ordering::Relaxed);
+        let next_state = if is_up {
+            ServiceHealthState::Up
+        } else if runtime.state() == ServiceHealthState::Starting {
+            ServiceHealthState::Starting
+        } else {
+            ServiceHealthState::Down
+        };
+        runtime.set_state(next_state);
 
-        let interval_ms = if is_up {
+        let interval_ms = if next_state == ServiceHealthState::Up {
             runtime.up_check_interval_ms.load(Ordering::Relaxed)
         } else {
             runtime.down_check_interval_ms.load(Ordering::Relaxed)
@@ -198,15 +241,42 @@ pub fn start_registered_service_health_monitors() {
 }
 
 pub fn is_service_up_cached(service_id: &str) -> bool {
-    let map = healths().lock().expect("service health lock poisoned");
-    map.get(service_id)
-        .map(|runtime| runtime.is_up.load(Ordering::Relaxed))
-        .unwrap_or(false)
+    service_health_state_cached(service_id) == ServiceHealthState::Up
 }
 
-pub fn set_service_up(service_id: &str, is_up: bool) {
+pub fn service_health_state_cached(service_id: &str) -> ServiceHealthState {
+    let map = healths().lock().expect("service health lock poisoned");
+    map.get(service_id)
+        .map(|runtime| runtime.state())
+        .unwrap_or(ServiceHealthState::Unknown)
+}
+
+pub fn set_service_state(service_id: &str, state: ServiceHealthState) {
     let runtime = runtime_for(service_id);
-    runtime.is_up.store(is_up, Ordering::Relaxed);
+    runtime.set_state(state);
+}
+
+pub fn try_mark_service_starting(service_id: &str) -> bool {
+    let runtime = runtime_for(service_id);
+    let target = ServiceHealthState::Starting.as_u8();
+    runtime
+        .state
+        .compare_exchange(
+            ServiceHealthState::Unknown.as_u8(),
+            target,
+            Ordering::AcqRel,
+            Ordering::Relaxed,
+        )
+        .is_ok()
+        || runtime
+            .state
+            .compare_exchange(
+                ServiceHealthState::Down.as_u8(),
+                target,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            )
+            .is_ok()
 }
 
 async fn refresh_service_health_async(runtime: &ServiceHealthRuntime) -> bool {

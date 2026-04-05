@@ -1,6 +1,5 @@
 use std::sync::mpsc::{self, Sender};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
 
@@ -9,20 +8,7 @@ use crate::hibernate;
 use dbus::blocking::Connection;
 
 use crate::config::ServiceCheckMode;
-
-struct ServiceStartRuntime {
-    starting: AtomicBool,
-}
-
-impl ServiceStartRuntime {
-    fn new() -> Self {
-        Self {
-            starting: AtomicBool::new(false),
-        }
-    }
-}
-
-static SERVICE_START_RUNTIMES: OnceLock<Mutex<std::collections::HashMap<String, Arc<ServiceStartRuntime>>>> = OnceLock::new();
+use crate::check::ServiceHealthState;
 static CONTROLLER_TX: OnceLock<Sender<ControllerCommand>> = OnceLock::new();
 
 enum ControllerAction {
@@ -34,10 +20,6 @@ struct ControllerCommand {
     action: ControllerAction,
     service_name: String,
     reply_tx: Sender<bool>,
-}
-
-fn start_runtimes() -> &'static Mutex<std::collections::HashMap<String, Arc<ServiceStartRuntime>>> {
-    SERVICE_START_RUNTIMES.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
 }
 
 pub fn init_process() {
@@ -75,17 +57,6 @@ fn request_service_action(action: ControllerAction, service_name: &str) -> bool 
     }
 
     reply_rx.recv().unwrap_or(false)
-}
-
-fn start_runtime_for(service_name: &str) -> Arc<ServiceStartRuntime> {
-    let mut map = start_runtimes().lock().expect("service start runtime lock poisoned");
-    if let Some(existing) = map.get(service_name) {
-        return Arc::clone(existing);
-    }
-
-    let runtime = Arc::new(ServiceStartRuntime::new());
-    map.insert(service_name.to_owned(), Arc::clone(&runtime));
-    runtime
 }
 
 fn run_service_action(action: ControllerAction, service_name: &str) -> bool {
@@ -150,13 +121,8 @@ pub fn start_service_async(
 ) {
     let service_name_owned = service_name.to_owned();
     let ready_endpoint_owned = ready_endpoint.to_owned();
-    let rt = start_runtime_for(&service_name_owned);
 
-    if rt
-        .starting
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
-        .is_err()
-    {
+    if !check::try_mark_service_starting(&service_name_owned) {
         return;
     }
 
@@ -176,12 +142,11 @@ pub fn start_service_async(
         );
 
         if started {
-            check::set_service_up(&service_name_owned, true);
+            check::set_service_state(&service_name_owned, ServiceHealthState::Up);
             hibernate::mark_service_started(&service_name_owned);
+        } else {
+            check::set_service_state(&service_name_owned, ServiceHealthState::Down);
         }
-
-        let runtime = start_runtime_for(&service_name_owned);
-        runtime.starting.store(false, Ordering::Release);
     });
 }
 
