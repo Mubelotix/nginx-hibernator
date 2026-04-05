@@ -1,16 +1,11 @@
 use std::collections::HashMap;
-use std::future::Future;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering};
-use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::thread;
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::runtime::Handle;
-use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout};
 
 use crate::config::ServiceCheckMode;
@@ -54,8 +49,6 @@ impl ServiceHealthRuntime {
 
 static SERVICE_HEALTHS: OnceLock<Mutex<HashMap<String, Arc<ServiceHealthRuntime>>>> = OnceLock::new();
 static REGISTERED_MONITORS: OnceLock<Mutex<HashMap<String, ServiceMonitorConfig>>> = OnceLock::new();
-static ASYNC_RUNTIME_STARTED: AtomicBool = AtomicBool::new(false);
-static ASYNC_RUNTIME_HANDLE: OnceLock<Handle> = OnceLock::new();
 static HEALTH_MONITOR_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 
 fn healths() -> &'static Mutex<HashMap<String, Arc<ServiceHealthRuntime>>> {
@@ -99,14 +92,6 @@ pub fn ensure_service_health_monitor(
     start_health_monitor_task_if_needed();
 }
 
-pub fn spawn_future_on_runtime<F>(future: F) -> Option<JoinHandle<F::Output>>
-where
-    F: Future + Send + 'static,
-    F::Output: Send + 'static,
-{
-    runtime_handle().map(|handle| handle.spawn(future))
-}
-
 fn apply_health_runtime_config(
     runtime: &Arc<ServiceHealthRuntime>,
     mode: ServiceCheckMode,
@@ -135,50 +120,12 @@ fn apply_health_runtime_config(
     runtime.next_check_at_ms.store(0, Ordering::Relaxed);
 }
 
-fn runtime_handle() -> Option<&'static Handle> {
-    start_async_runtime_if_needed();
-    ASYNC_RUNTIME_HANDLE.get()
-}
-
-fn start_async_runtime_if_needed() {
-    if ASYNC_RUNTIME_STARTED
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
-        .is_ok()
-    {
-        let (handle_tx, handle_rx) = mpsc::channel::<Handle>();
-        thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_time()
-                .build()
-                .expect("failed to build hibernator async runtime");
-
-            let handle = runtime.handle().clone();
-            let _ = handle_tx.send(handle);
-
-            runtime.block_on(async {
-                std::future::pending::<()>().await;
-            });
-        });
-
-        if let Ok(handle) = handle_rx.recv() {
-            let _ = ASYNC_RUNTIME_HANDLE.set(handle);
-        }
-    } else {
-        for _ in 0..20 {
-            if ASYNC_RUNTIME_HANDLE.get().is_some() {
-                break;
-            }
-            thread::sleep(Duration::from_millis(1));
-        }
-    }
-}
-
 fn start_health_monitor_task_if_needed() {
     if HEALTH_MONITOR_TASK_STARTED
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
         .is_ok()
     {
-        let spawned = spawn_future_on_runtime(async {
+        let spawned = crate::runtime::spawn_future_on_runtime(async {
             loop {
                 run_health_monitor_iteration_async().await;
                 sleep(Duration::from_millis(250)).await;

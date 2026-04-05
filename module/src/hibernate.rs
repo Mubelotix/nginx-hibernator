@@ -67,7 +67,7 @@ pub fn mark_service_started(service_name: &str) {
 
 fn spawn_idle_monitor(service_name: String, runtime: Arc<HibernateRuntime>) {
     let service_name_for_error = service_name.clone();
-    let spawned = crate::check::spawn_future_on_runtime(async move {
+    let spawned = crate::runtime::spawn_future_on_runtime(async move {
         loop {
             sleep(Duration::from_secs(1)).await;
 
