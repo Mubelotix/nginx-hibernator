@@ -129,6 +129,7 @@ impl HibernatorRequestHandler {
             &conf.check_endpoint,
             conf.check_timeout_ms,
             conf.up_check_interval_ms,
+            conf.starting_check_interval_ms,
             conf.down_check_interval_ms,
         );
 

@@ -6,7 +6,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::time::{sleep, timeout};
+use tokio::sync::Notify;
+use tokio::time::timeout;
 
 use crate::config::ServiceCheckMode;
 
@@ -43,9 +44,11 @@ struct ServiceHealthRuntime {
     port: AtomicU16,
     timeout_ms: AtomicU64,
     up_check_interval_ms: AtomicU64,
+    starting_check_interval_ms: AtomicU64,
     down_check_interval_ms: AtomicU64,
     endpoint: Mutex<String>,
     state: AtomicU8,
+    state_change_notify: Notify,
 }
 
 #[derive(Clone)]
@@ -56,6 +59,7 @@ struct ServiceMonitorConfig {
     endpoint: String,
     timeout_ms: u64,
     up_check_interval_ms: u64,
+    starting_check_interval_ms: u64,
     down_check_interval_ms: u64,
 }
 
@@ -66,9 +70,11 @@ impl ServiceHealthRuntime {
             port: AtomicU16::new(0),
             timeout_ms: AtomicU64::new(100),
             up_check_interval_ms: AtomicU64::new(10_000),
+            starting_check_interval_ms: AtomicU64::new(100),
             down_check_interval_ms: AtomicU64::new(60_000),
             endpoint: Mutex::new("/ready".to_owned()),
             state: AtomicU8::new(ServiceHealthState::Unknown.as_u8()),
+            state_change_notify: Notify::new(),
         }
     }
 
@@ -76,8 +82,15 @@ impl ServiceHealthRuntime {
         ServiceHealthState::from_u8(self.state.load(Ordering::Relaxed))
     }
 
-    fn set_state(&self, state: ServiceHealthState) {
+    fn set_state_without_notify(&self, state: ServiceHealthState) {
         self.state.store(state.as_u8(), Ordering::Relaxed);
+    }
+
+    fn set_state(&self, state: ServiceHealthState) {
+        let previous = self.state.swap(state.as_u8(), Ordering::AcqRel);
+        if previous != state.as_u8() {
+            self.state_change_notify.notify_waiters();
+        }
     }
 }
 
@@ -111,6 +124,7 @@ pub fn ensure_service_health_monitor(
     endpoint: &str,
     timeout_ms: u64,
     up_check_interval_ms: u64,
+    starting_check_interval_ms: u64,
     down_check_interval_ms: u64,
 ) {
     let runtime = runtime_for(service_id);
@@ -121,6 +135,7 @@ pub fn ensure_service_health_monitor(
         endpoint,
         timeout_ms,
         up_check_interval_ms,
+        starting_check_interval_ms,
         down_check_interval_ms,
     );
     start_health_monitor_task_if_needed();
@@ -133,6 +148,7 @@ fn apply_health_runtime_config(
     endpoint: &str,
     timeout_ms: u64,
     up_check_interval_ms: u64,
+    starting_check_interval_ms: u64,
     down_check_interval_ms: u64,
 ) {
     runtime.mode.store(mode_to_u8(mode), Ordering::Relaxed);
@@ -141,6 +157,9 @@ fn apply_health_runtime_config(
     runtime
         .up_check_interval_ms
         .store(up_check_interval_ms.max(1), Ordering::Relaxed);
+    runtime
+        .starting_check_interval_ms
+        .store(starting_check_interval_ms.max(1), Ordering::Relaxed);
     runtime
         .down_check_interval_ms
         .store(down_check_interval_ms.max(1), Ordering::Relaxed);
@@ -172,6 +191,23 @@ fn start_health_monitor_task_if_needed() {
 
 async fn monitor_service_health(runtime: Arc<ServiceHealthRuntime>) {
     loop {
+        let interval_ms = match runtime.state() {
+            ServiceHealthState::Up => runtime.up_check_interval_ms.load(Ordering::Relaxed),
+            ServiceHealthState::Starting => runtime.starting_check_interval_ms.load(Ordering::Relaxed),
+            ServiceHealthState::Down => runtime.down_check_interval_ms.load(Ordering::Relaxed),
+            ServiceHealthState::Unknown => 0
+        };
+
+        let notified = timeout(
+            Duration::from_millis(interval_ms),
+            runtime.state_change_notify.notified(),
+        )
+        .await.is_ok();
+
+        if notified {
+            continue;
+        }
+
         let is_up = refresh_service_health_async(&runtime).await;
         let next_state = if is_up {
             ServiceHealthState::Up
@@ -180,16 +216,7 @@ async fn monitor_service_health(runtime: Arc<ServiceHealthRuntime>) {
         } else {
             ServiceHealthState::Down
         };
-        runtime.set_state(next_state);
-
-        let interval_ms = if next_state == ServiceHealthState::Up {
-            runtime.up_check_interval_ms.load(Ordering::Relaxed)
-        } else {
-            runtime.down_check_interval_ms.load(Ordering::Relaxed)
-        }
-        .max(1);
-
-        sleep(Duration::from_millis(interval_ms)).await;
+        runtime.set_state_without_notify(next_state);        
     }
 }
 
@@ -200,6 +227,7 @@ pub fn register_service_health_monitor(
     endpoint: &str,
     timeout_ms: u64,
     up_check_interval_ms: u64,
+    starting_check_interval_ms: u64,
     down_check_interval_ms: u64,
 ) {
     let mut map = registered_monitors()
@@ -214,6 +242,7 @@ pub fn register_service_health_monitor(
             endpoint: endpoint.to_owned(),
             timeout_ms,
             up_check_interval_ms,
+            starting_check_interval_ms,
             down_check_interval_ms,
         },
     );
@@ -235,6 +264,7 @@ pub fn start_registered_service_health_monitors() {
             &cfg.endpoint,
             cfg.timeout_ms,
             cfg.up_check_interval_ms,
+            cfg.starting_check_interval_ms,
             cfg.down_check_interval_ms,
         );
     }

@@ -176,6 +176,10 @@ http {
       # Default: 10s
       hibernator_up_check_interval 10s;
 
+      # Background health monitor interval while the service is in starting state.
+      # Default: 100ms
+      hibernator_starting_check_interval 100ms;
+
       # Background health monitor interval while the service is down.
       # Default: 60s
       hibernator_down_check_interval 60s;
