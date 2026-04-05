@@ -14,7 +14,7 @@ You can hibernate any service that:
 
 - **Automatic Hibernation**: Services are automatically stopped after a configurable period of inactivity
 - **Seamless Wake-up**: Incoming requests trigger service startup
-- **Landing Page**: Customizable landing page displayed while the service is starting
+- **Landing Page**: Customizable landing page displayed while the service is starting; see [landing/README.md](landing/README.md) for how to build one
 - **Web Dashboard**: Monitor service states, view metrics, and analyze activity patterns through a minimalistic frontend
 - **Persistent Storage**: Request history and state transitions stored in LMDB for efficient querying
 - **Smart ETA Calculation**: Provides startup time estimates based on historical data

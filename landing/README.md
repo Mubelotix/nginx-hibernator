@@ -1,53 +1,47 @@
 # Landing Page Folder
 
-This folder contains the landing page shown to users when a hibernated site is starting up.
+This folder contains the static landing page shown while the nginx module is
+starting or waking a hibernated upstream.
 
-## Structure
+## How It Is Served
 
-- `index.html` - The main landing page template served when a site is booting
-- Any additional assets (CSS, JS, images, fonts, etc.) should be served by nginx
+The module reads `index.html` from the configured landing directory and serves
+it directly when the upstream is unavailable.
 
-## Template Variables
+It also serves any other files in that directory under the
+`/hibernator-landing/` prefix. For example, if `servers.json` lives next to
+`index.html`, the page can load it from `/hibernator-landing/servers.json`.
 
-The `index.html` file supports the following template variables that are replaced at runtime:
+The module does not perform backend-style template substitution. `index.html`
+should be written as a plain static page and any dynamic behavior should come
+from client-side JavaScript.
 
-- `DONE_MS` - Milliseconds of boot time completed
-- `DURATION_MS` - Estimated total boot time in milliseconds  
-- `KEEP_ALIVE` - Keep-alive duration in seconds
+## Folder Layout
 
-## Serving Assets
-
-The hibernator only serves `index.html` with template variable replacement. All other static assets (CSS, JS, images, etc.) should be served by nginx for better performance.
-
-Configure nginx to serve the landing folder:
-
-```nginx
-location /landing/ {
-    alias /path/to/landing/;
-    expires 1h;
-}
-```
-
-Then reference assets in your `index.html`:
-```html
-<link rel="stylesheet" href="/landing/style.css">
-<script src="/landing/script.js"></script>
-<img src="/landing/logo.png">
-```
+- `index.html` - fallback page returned while the service is starting
+- `servers.json`, `star.json`, and other static assets - served as files from
+    the same directory
 
 ## Configuration
 
-The landing folder path can be configured:
+Point the nginx module at this directory with `hibernator_landing_dir`:
 
-**Global (in config.toml):**
-```toml
-landing_folder = "./landing"
+```nginx
+location / {
+    hibernator on;
+    hibernator_service_name simple_python_http;
+    hibernator_check_port 18081;
+    hibernator_landing_dir /opt/nginx-hibernator/landing;
+    proxy_pass http://backend;
+}
 ```
 
-**Per-site override:**
-```toml
-[[sites]]
-name = "my-site"
-landing_folder = "/custom/path/to/landing"
-# ... other config
-```
+If `hibernator_landing_dir` is not set or the directory cannot be read, the
+module falls back to a built-in HTML page.
+
+## Authoring Notes
+
+- Keep all landing assets in the same directory so they can be served under
+    `/hibernator-landing/`.
+- Use relative URLs or the `/hibernator-landing/` prefix for local assets.
+- Avoid relying on runtime variables injected by the server.
