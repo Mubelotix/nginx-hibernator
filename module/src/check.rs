@@ -116,18 +116,21 @@ fn apply_health_runtime_config(
 }
 
 fn start_health_monitor_task_if_needed() {
+    // Exit if already started by another thread
     if HEALTH_MONITOR_TASK_STARTED
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
-        .is_ok()
+        .is_err()
     {
-        let runtimes: Vec<Arc<ServiceHealthRuntime>> = {
-            let map = healths().lock().expect("service health lock poisoned");
-            map.values().cloned().collect()
-        };
+        return;
+    }
 
-        for runtime in runtimes {
-            crate::runtime::spawn_future_on_runtime(monitor_service_health(runtime));
-        }
+    let runtimes: Vec<Arc<ServiceHealthRuntime>> = {
+        let map = healths().lock().expect("service health lock poisoned");
+        map.values().cloned().collect()
+    };
+
+    for runtime in runtimes {
+        crate::runtime::spawn_future_on_runtime(monitor_service_health(runtime));
     }
 }
 
