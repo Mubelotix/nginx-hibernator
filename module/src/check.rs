@@ -307,13 +307,13 @@ async fn refresh_service_health_async(runtime: &ServiceHealthRuntime) -> bool {
 fn mode_to_u8(mode: ServiceCheckMode) -> u8 {
     match mode {
         ServiceCheckMode::Http => 0,
-        ServiceCheckMode::Port => 1,
+        ServiceCheckMode::Tcp => 1,
     }
 }
 
 fn mode_from_u8(mode: u8) -> ServiceCheckMode {
     match mode {
-        1 => ServiceCheckMode::Port,
+        1 => ServiceCheckMode::Tcp,
         _ => ServiceCheckMode::Http,
     }
 }
@@ -321,14 +321,14 @@ fn mode_from_u8(mode: u8) -> ServiceCheckMode {
 pub fn is_service_up(mode: ServiceCheckMode, port: u16, endpoint: &str, timeout_ms: u64) -> bool {
     match mode {
         ServiceCheckMode::Http => is_service_up_http(port, endpoint, timeout_ms),
-        ServiceCheckMode::Port => is_service_up_port(port, timeout_ms),
+        ServiceCheckMode::Tcp => is_service_up_port(port, timeout_ms),
     }
 }
 
 async fn is_service_up_async(mode: ServiceCheckMode, port: u16, endpoint: &str, timeout_ms: u64) -> bool {
     match mode {
         ServiceCheckMode::Http => is_service_up_http_async(port, endpoint, timeout_ms).await,
-        ServiceCheckMode::Port => is_service_up_port_async(port, timeout_ms).await,
+        ServiceCheckMode::Tcp => is_service_up_port_async(port, timeout_ms).await,
     }
 }
 

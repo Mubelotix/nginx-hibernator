@@ -159,7 +159,7 @@ http {
       hibernator_check_port 18081;
 
       # Service readiness check mode.
-      # Values: http | port
+      # Values: http | tcp
       # Default: http
       hibernator_check_mode http;
 

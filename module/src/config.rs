@@ -12,7 +12,7 @@ use crate::check;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServiceCheckMode {
     Http,
-    Port,
+    Tcp,
 }
 
 impl Default for ServiceCheckMode {
@@ -234,8 +234,8 @@ fn parse_on_off(val: &str) -> Option<bool> {
 fn parse_service_check_mode(val: &str) -> Option<ServiceCheckMode> {
     if val.eq_ignore_ascii_case("http") {
         Some(ServiceCheckMode::Http)
-    } else if val.eq_ignore_ascii_case("port") {
-        Some(ServiceCheckMode::Port)
+    } else if val.eq_ignore_ascii_case("tcp") {
+        Some(ServiceCheckMode::Tcp)
     } else {
         None
     }
@@ -396,7 +396,7 @@ extern "C" fn set_check_mode(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf
         conf.check_mode = mode;
         ngx::core::NGX_CONF_OK
     } else {
-        ngx_conf_log_error!(NGX_LOG_EMERG, cf, "invalid service check mode: use `http` or `port`");
+        ngx_conf_log_error!(NGX_LOG_EMERG, cf, "invalid service check mode: use `http` or `tcp`");
         ngx::core::NGX_CONF_ERROR
     }
 }
