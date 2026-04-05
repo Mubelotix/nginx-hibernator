@@ -8,6 +8,28 @@ use ngx::ffi::{
 use ngx::http::{self, HttpModule, HttpModuleLocationConf, Request};
 use ngx::{ngx_conf_log_error, ngx_log_debug_http};
 
+#[macro_export]
+macro_rules! log {
+    ($($arg:tt)+) => {
+        ngx::ngx_log_error!(
+            ngx::ffi::NGX_LOG_NOTICE,
+            ngx::log::ngx_cycle_log().as_ptr(),
+            $($arg)+
+        );
+    };
+}
+
+#[macro_export]
+macro_rules! elog {
+    ($($arg:tt)+) => {
+        ngx::ngx_log_error!(
+            ngx::ffi::NGX_LOG_ERR,
+            ngx::log::ngx_cycle_log().as_ptr(),
+            $($arg)+
+        );
+    };
+}
+
 mod config;
 mod check;
 mod hibernate;

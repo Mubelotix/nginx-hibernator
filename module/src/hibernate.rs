@@ -3,21 +3,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ngx::ffi::{NGX_LOG_ERR, NGX_LOG_NOTICE};
-use ngx::ngx_log_error;
 use tokio::time::sleep;
-
-macro_rules! log {
-    ($($arg:tt)+) => {
-        ngx_log_error!(NGX_LOG_NOTICE, ngx::log::ngx_cycle_log().as_ptr(), $($arg)+);
-    };
-}
-
-macro_rules! elog {
-    ($($arg:tt)+) => {
-        ngx_log_error!(NGX_LOG_ERR, ngx::log::ngx_cycle_log().as_ptr(), $($arg)+);
-    };
-}
 
 struct HibernateRuntime {
     last_activity_secs: AtomicU64,
@@ -85,7 +71,7 @@ fn spawn_idle_monitor(service_name: String, runtime: Arc<HibernateRuntime>) {
             let idle = now.saturating_sub(last);
 
             if idle >= keep_alive {
-                log!(
+                crate::log!(
                     "hibernator: stopping service {} after {}s of idle time",
                     service_name,
                     idle
@@ -94,14 +80,14 @@ fn spawn_idle_monitor(service_name: String, runtime: Arc<HibernateRuntime>) {
                     crate::check::set_service_up(&service_name, false);
                     runtime.started_by_module.store(false, Ordering::Relaxed);
                 } else {
-                    elog!("hibernator: failed to stop service {}", service_name);
+                    crate::elog!("hibernator: failed to stop service {}", service_name);
                 }
             }
         }
     });
 
     if spawned.is_none() {
-        elog!(
+        crate::elog!(
             "hibernator: failed to spawn idle monitor for {} on async runtime",
             service_name_for_error
         );

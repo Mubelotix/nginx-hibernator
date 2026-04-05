@@ -7,22 +7,8 @@ use std::time::Duration;
 use crate::check;
 use crate::hibernate;
 use dbus::blocking::Connection;
-use ngx::ffi::{NGX_LOG_ERR, NGX_LOG_NOTICE};
-use ngx::ngx_log_error;
 
 use crate::config::ServiceCheckMode;
-
-macro_rules! log {
-    ($($arg:tt)+) => {
-        ngx_log_error!(NGX_LOG_NOTICE, ngx::log::ngx_cycle_log().as_ptr(), $($arg)+);
-    };
-}
-
-macro_rules! elog {
-    ($($arg:tt)+) => {
-        ngx_log_error!(NGX_LOG_ERR, ngx::log::ngx_cycle_log().as_ptr(), $($arg)+);
-    };
-}
 
 struct ServiceStartRuntime {
     starting: AtomicBool,
@@ -62,7 +48,7 @@ fn controller_tx() -> &'static Sender<ControllerCommand> {
     CONTROLLER_TX.get_or_init(|| {
         let (tx, rx) = mpsc::channel::<ControllerCommand>();
         thread::spawn(move || {
-            log!("hibernator: internal controller thread started");
+            crate::log!("hibernator: internal controller thread started");
             while let Ok(cmd) = rx.recv() {
                 let ok = match cmd.action {
                     ControllerAction::Start => run_service_action(ControllerAction::Start, &cmd.service_name),
@@ -84,7 +70,7 @@ fn request_service_action(action: ControllerAction, service_name: &str) -> bool 
     };
 
     if controller_tx().send(cmd).is_err() {
-        elog!("hibernator: failed to send command to internal controller");
+        crate::elog!("hibernator: failed to send command to internal controller");
         return false;
     }
 
@@ -110,7 +96,7 @@ fn run_service_action(action: ControllerAction, service_name: &str) -> bool {
     };
 
     let Ok(conn) = Connection::new_system() else {
-        elog!("hibernator: failed to connect to system bus");
+        crate::elog!("hibernator: failed to connect to system bus");
         return false;
     };
 
@@ -142,7 +128,7 @@ fn run_service_action(action: ControllerAction, service_name: &str) -> bool {
             ControllerAction::Start => "start",
             ControllerAction::Stop => "stop",
         };
-        elog!("hibernator: failed to {} service {} via dbus: {}", op, service_name, e);
+        crate::elog!("hibernator: failed to {} service {} via dbus: {}", op, service_name, e);
         return false;
     }
 
@@ -175,7 +161,7 @@ pub fn start_service_async(
     }
 
     thread::spawn(move || {
-        log!(
+        crate::log!(
             "hibernator: scheduling async start for service {}",
             service_name_owned
         );
@@ -208,9 +194,9 @@ fn start_service_and_wait_ready_inner(
     timeout_ms: u64,
     check_interval_ms: u64,
 ) -> bool {
-    log!("hibernator: starting service {}", service_name);
+    crate::log!("hibernator: starting service {}", service_name);
     if !request_service_action(ControllerAction::Start, service_name) {
-        elog!("hibernator: failed to start service {}", service_name);
+        crate::elog!("hibernator: failed to start service {}", service_name);
         return false;
     }
 
@@ -220,12 +206,12 @@ fn start_service_and_wait_ready_inner(
     for _ in 0..max_checks {
         if check::is_service_up(check_mode, target_port, ready_endpoint, ready_timeout_ms) {
             hibernate::mark_service_started(service_name);
-            log!("hibernator: service {} is ready", service_name);
+            crate::log!("hibernator: service {} is ready", service_name);
             return true;
         }
         thread::sleep(Duration::from_millis(interval));
     }
 
-    elog!("hibernator: service {} did not become ready in time", service_name);
+    crate::elog!("hibernator: service {} did not become ready in time", service_name);
     false
 }
