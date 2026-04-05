@@ -12,6 +12,10 @@ use ngx::ffi::{
 use ngx::http::{self, HttpModule, HttpModuleLocationConf, Request};
 use ngx::{ngx_conf_log_error, ngx_log_debug_http};
 
+unsafe extern "C" {
+    fn ngx_http_finalize_request(r: *mut ngx_http_request_t, rc: ngx_int_t);
+}
+
 mod config;
 mod check;
 mod hibernate;
@@ -231,6 +235,11 @@ fn send_page_response(
     }
 
     let body_status = unsafe { request.output_filter(&mut *chain) };
+    unsafe {
+        let request_ptr: *mut ngx_http_request_t = request.into();
+        ngx_http_finalize_request(request_ptr, body_status.0);
+    }
+
     if body_status == Status::NGX_OK {
         Status::NGX_DONE
     } else {

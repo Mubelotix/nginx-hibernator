@@ -121,18 +121,20 @@ fn start_health_monitor_if_needed(runtime: &Arc<ServiceHealthRuntime>) {
         .is_ok()
     {
         let runtime = Arc::clone(runtime);
-        thread::spawn(move || loop {
-            refresh_service_health(&runtime);
+        thread::spawn(move || {
+            loop {
+                refresh_service_health(&runtime);
 
-            let is_up = runtime.is_up.load(Ordering::Relaxed);
-            let interval_ms = if is_up {
-                runtime.up_check_interval_ms.load(Ordering::Relaxed)
-            } else {
-                runtime.down_check_interval_ms.load(Ordering::Relaxed)
+                let is_up = runtime.is_up.load(Ordering::Relaxed);
+                let interval_ms = if is_up {
+                    runtime.up_check_interval_ms.load(Ordering::Relaxed)
+                } else {
+                    runtime.down_check_interval_ms.load(Ordering::Relaxed)
+                }
+                .max(1);
+
+                thread::sleep(Duration::from_millis(interval_ms));
             }
-            .max(1);
-
-            thread::sleep(Duration::from_millis(interval_ms));
         });
     }
 }

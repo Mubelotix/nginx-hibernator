@@ -142,7 +142,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStartPre=/usr/bin/sleep 5
+ExecStartPre=/usr/bin/sleep 10
 ExecStart=$PYTHON_BIN -m http.server $BACKEND_PORT --bind 127.0.0.1 --directory $BACKEND_ROOT
 WorkingDirectory=$BACKEND_ROOT
 Restart=no
