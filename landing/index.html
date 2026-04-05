@@ -68,6 +68,27 @@
             border-radius: 3px;
             transition: width 0.1s linear;
         }
+        .progress-indeterminate {
+            position: relative;
+        }
+        .progress-indeterminate .progress-fill {
+            width: 35%;
+            min-width: 48px;
+            animation: indeterminate-slide 1.35s ease-in-out infinite;
+            transform: translateX(-120%);
+            will-change: transform;
+        }
+        @keyframes indeterminate-slide {
+            0% {
+                transform: translateX(-120%);
+            }
+            50% {
+                transform: translateX(150%);
+            }
+            100% {
+                transform: translateX(320%);
+            }
+        }
         #star-link {
             text-decoration: none;
             color: white;
@@ -166,56 +187,61 @@
                 });
         }, Math.min(keep_alive * 1000, 1000));
 
-        if (duration_ms <= 0) {
-            // If duration is unknown, skip progress bar and countdown
-            throw new Error("Unknown duration, skipping progress bar and countdown.");
-        }
-
-        // Progress and ETA display
-        const startTime = Date.now();
-        const initialRemaining_ms = duration_ms - done_ms;
-        const progress = (done_ms / duration_ms) * 100;
-
-        // Show and update progress bar
         const progressContainer = document.getElementById('progress-container');
         const progressFill = document.getElementById('progress-fill');
         const message = document.getElementById('inner-message');
-        
-        progressContainer.style.display = 'block';
-        progressFill.style.width = `${progress}%`;
 
-        // Update progress bar smoothly and frequently
-        function updateProgressBar() {
-            const elapsed = Date.now() - startTime;
-            const totalElapsed = done_ms + elapsed;
-            const currentProgress = Math.min(98, (totalElapsed / duration_ms) * 100);
-            progressFill.style.width = `${currentProgress}%`;
+        function showUnknownProgress() {
+            progressContainer.style.display = 'block';
+            progressContainer.classList.add('progress-indeterminate');
+            progressFill.style.width = '';
         }
 
-        // Update countdown text (only needs to update once per second)
-        function updateCountdown() {
-            const elapsed = Date.now() - startTime;
-            const remaining_ms = initialRemaining_ms - elapsed;
-            const remaining = Math.ceil(remaining_ms / 1000);
-            
-            if (remaining > 0) {
-                message.innerHTML = `Estimated time remaining: <strong>${remaining} second${remaining !== 1 ? 's' : ''}</strong>.`;
-            } else if (remaining > -10) {
-                message.innerHTML = `Estimated time remaining: <strong>Soon™</strong>.`;
-            } else {
-                message.innerHTML = `The server is taking longer than expected.<br>Please be patient, or try again later.<br>Sorry for the inconvenience.`;
+        if (duration_ms <= 0) {
+            showUnknownProgress();
+        } else {
+            // Progress and ETA display
+            const startTime = Date.now();
+            const initialRemaining_ms = duration_ms - done_ms;
+            const progress = (done_ms / duration_ms) * 100;
+
+            // Show and update progress bar
+            progressContainer.style.display = 'block';
+            progressFill.style.width = `${progress}%`;
+
+            // Update progress bar smoothly and frequently
+            function updateProgressBar() {
+                const elapsed = Date.now() - startTime;
+                const totalElapsed = done_ms + elapsed;
+                const currentProgress = Math.min(98, (totalElapsed / duration_ms) * 100);
+                progressFill.style.width = `${currentProgress}%`;
             }
-        }
 
-        // Initial updates
-        updateProgressBar();
-        updateCountdown();
-        
-        // Update progress bar frequently for smooth animation (10 times per second)
-        setInterval(updateProgressBar, 100);
-        
-        // Update countdown text once per second
-        setInterval(updateCountdown, 1000);
+            // Update countdown text (only needs to update once per second)
+            function updateCountdown() {
+                const elapsed = Date.now() - startTime;
+                const remaining_ms = initialRemaining_ms - elapsed;
+                const remaining = Math.ceil(remaining_ms / 1000);
+                
+                if (remaining > 0) {
+                    message.innerHTML = `Estimated time remaining: <strong>${remaining} second${remaining !== 1 ? 's' : ''}</strong>.`;
+                } else if (remaining > -10) {
+                    message.innerHTML = `Estimated time remaining: <strong>Soon™</strong>.`;
+                } else {
+                    message.innerHTML = `The server is taking longer than expected.<br>Please be patient, or try again later.<br>Sorry for the inconvenience.`;
+                }
+            }
+
+            // Initial updates
+            updateProgressBar();
+            updateCountdown();
+            
+            // Update progress bar frequently for smooth animation (10 times per second)
+            setInterval(updateProgressBar, 100);
+            
+            // Update countdown text once per second
+            setInterval(updateCountdown, 1000);
+        }
     </script>
 </body>
 </html>
