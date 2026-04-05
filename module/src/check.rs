@@ -1,10 +1,17 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
+
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::runtime::Handle;
+use tokio::task::JoinHandle;
+use tokio::time::{sleep, timeout};
 
 use crate::config::ServiceCheckMode;
 
@@ -14,9 +21,9 @@ struct ServiceHealthRuntime {
     timeout_ms: AtomicU64,
     up_check_interval_ms: AtomicU64,
     down_check_interval_ms: AtomicU64,
+    next_check_at_ms: AtomicU64,
     endpoint: Mutex<String>,
     is_up: AtomicBool,
-    monitor_started: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -38,15 +45,18 @@ impl ServiceHealthRuntime {
             timeout_ms: AtomicU64::new(100),
             up_check_interval_ms: AtomicU64::new(10_000),
             down_check_interval_ms: AtomicU64::new(60_000),
+            next_check_at_ms: AtomicU64::new(0),
             endpoint: Mutex::new("/ready".to_owned()),
             is_up: AtomicBool::new(false),
-            monitor_started: AtomicBool::new(false),
         }
     }
 }
 
 static SERVICE_HEALTHS: OnceLock<Mutex<HashMap<String, Arc<ServiceHealthRuntime>>>> = OnceLock::new();
 static REGISTERED_MONITORS: OnceLock<Mutex<HashMap<String, ServiceMonitorConfig>>> = OnceLock::new();
+static ASYNC_RUNTIME_STARTED: AtomicBool = AtomicBool::new(false);
+static ASYNC_RUNTIME_HANDLE: OnceLock<Handle> = OnceLock::new();
+static HEALTH_MONITOR_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 
 fn healths() -> &'static Mutex<HashMap<String, Arc<ServiceHealthRuntime>>> {
     SERVICE_HEALTHS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -86,7 +96,15 @@ pub fn ensure_service_health_monitor(
         up_check_interval_ms,
         down_check_interval_ms,
     );
-    start_health_monitor_if_needed(&runtime);
+    start_health_monitor_task_if_needed();
+}
+
+pub fn spawn_future_on_runtime<F>(future: F) -> Option<JoinHandle<F::Output>>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    runtime_handle().map(|handle| handle.spawn(future))
 }
 
 fn apply_health_runtime_config(
@@ -112,31 +130,106 @@ fn apply_health_runtime_config(
         ep.clear();
         ep.push_str(endpoint);
     }
+
+    // Trigger a fast re-check after config updates.
+    runtime.next_check_at_ms.store(0, Ordering::Relaxed);
 }
 
-fn start_health_monitor_if_needed(runtime: &Arc<ServiceHealthRuntime>) {
-    if runtime
-        .monitor_started
+fn runtime_handle() -> Option<&'static Handle> {
+    start_async_runtime_if_needed();
+    ASYNC_RUNTIME_HANDLE.get()
+}
+
+fn start_async_runtime_if_needed() {
+    if ASYNC_RUNTIME_STARTED
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
         .is_ok()
     {
-        let runtime = Arc::clone(runtime);
+        let (handle_tx, handle_rx) = mpsc::channel::<Handle>();
         thread::spawn(move || {
-            loop {
-                refresh_service_health(&runtime);
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("failed to build hibernator async runtime");
 
-                let is_up = runtime.is_up.load(Ordering::Relaxed);
-                let interval_ms = if is_up {
-                    runtime.up_check_interval_ms.load(Ordering::Relaxed)
-                } else {
-                    runtime.down_check_interval_ms.load(Ordering::Relaxed)
-                }
-                .max(1);
+            let handle = runtime.handle().clone();
+            let _ = handle_tx.send(handle);
 
-                thread::sleep(Duration::from_millis(interval_ms));
-            }
+            runtime.block_on(async {
+                std::future::pending::<()>().await;
+            });
         });
+
+        if let Ok(handle) = handle_rx.recv() {
+            let _ = ASYNC_RUNTIME_HANDLE.set(handle);
+        }
+    } else {
+        for _ in 0..20 {
+            if ASYNC_RUNTIME_HANDLE.get().is_some() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
     }
+}
+
+fn start_health_monitor_task_if_needed() {
+    if HEALTH_MONITOR_TASK_STARTED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_ok()
+    {
+        let spawned = spawn_future_on_runtime(async {
+            loop {
+                run_health_monitor_iteration_async().await;
+                sleep(Duration::from_millis(250)).await;
+            }
+        })
+        .is_some();
+
+        if !spawned {
+            HEALTH_MONITOR_TASK_STARTED.store(false, Ordering::Release);
+        }
+    }
+}
+
+async fn run_health_monitor_iteration_async() {
+    let runtimes: Vec<Arc<ServiceHealthRuntime>> = {
+        let map = healths().lock().expect("service health lock poisoned");
+        map.values().cloned().collect()
+    };
+
+    if runtimes.is_empty() {
+        return;
+    }
+
+    let now = now_millis();
+    for runtime in runtimes {
+        let next_check_at_ms = runtime.next_check_at_ms.load(Ordering::Relaxed);
+        if next_check_at_ms > now {
+            continue;
+        }
+
+        let is_up = refresh_service_health_async(&runtime).await;
+        runtime.is_up.store(is_up, Ordering::Relaxed);
+
+        let interval_ms = if is_up {
+            runtime.up_check_interval_ms.load(Ordering::Relaxed)
+        } else {
+            runtime.down_check_interval_ms.load(Ordering::Relaxed)
+        }
+        .max(1);
+
+        runtime
+            .next_check_at_ms
+            .store(now.saturating_add(interval_ms), Ordering::Relaxed);
+    }
+}
+
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis().try_into().unwrap_or(u64::MAX))
+        .unwrap_or(0)
 }
 
 pub fn register_service_health_monitor(
@@ -198,7 +291,7 @@ pub fn set_service_up(service_id: &str, is_up: bool) {
     runtime.is_up.store(is_up, Ordering::Relaxed);
 }
 
-fn refresh_service_health(runtime: &ServiceHealthRuntime) {
+async fn refresh_service_health_async(runtime: &ServiceHealthRuntime) -> bool {
     let mode = mode_from_u8(runtime.mode.load(Ordering::Relaxed));
     let port = runtime.port.load(Ordering::Relaxed);
     let timeout_ms = runtime.timeout_ms.load(Ordering::Relaxed).max(1);
@@ -208,8 +301,7 @@ fn refresh_service_health(runtime: &ServiceHealthRuntime) {
         .map(|ep| ep.clone())
         .unwrap_or_else(|_| "/ready".to_owned());
 
-    let is_up = is_service_up(mode, port, &endpoint, timeout_ms);
-    runtime.is_up.store(is_up, Ordering::Relaxed);
+    is_service_up_async(mode, port, &endpoint, timeout_ms).await
 }
 
 fn mode_to_u8(mode: ServiceCheckMode) -> u8 {
@@ -231,6 +323,67 @@ pub fn is_service_up(mode: ServiceCheckMode, port: u16, endpoint: &str, timeout_
         ServiceCheckMode::Http => is_service_up_http(port, endpoint, timeout_ms),
         ServiceCheckMode::Port => is_service_up_port(port, timeout_ms),
     }
+}
+
+async fn is_service_up_async(mode: ServiceCheckMode, port: u16, endpoint: &str, timeout_ms: u64) -> bool {
+    match mode {
+        ServiceCheckMode::Http => is_service_up_http_async(port, endpoint, timeout_ms).await,
+        ServiceCheckMode::Port => is_service_up_port_async(port, timeout_ms).await,
+    }
+}
+
+async fn is_service_up_port_async(port: u16, timeout_ms: u64) -> bool {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    timeout(
+        Duration::from_millis(timeout_ms.max(1)),
+        tokio::net::TcpStream::connect(addr),
+    )
+    .await
+    .is_ok_and(|res| res.is_ok())
+}
+
+async fn is_service_up_http_async(port: u16, endpoint: &str, timeout_ms: u64) -> bool {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let timeout_dur = Duration::from_millis(timeout_ms.max(1));
+
+    let Ok(connect_result) = timeout(timeout_dur, tokio::net::TcpStream::connect(addr)).await else {
+        return false;
+    };
+    let Ok(mut stream) = connect_result else {
+        return false;
+    };
+
+    let request = format!(
+        "GET {} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+        endpoint
+    );
+
+    if timeout(timeout_dur, stream.write_all(request.as_bytes()))
+        .await
+        .is_err()
+    {
+        return false;
+    }
+
+    let mut buf = [0_u8; 512];
+    let Ok(read_result) = timeout(timeout_dur, stream.read(&mut buf)).await else {
+        return false;
+    };
+    let Ok(n) = read_result else {
+        return false;
+    };
+    if n == 0 {
+        return false;
+    }
+
+    let Ok(head) = std::str::from_utf8(&buf[..n]) else {
+        return false;
+    };
+    let Some(first_line) = head.lines().next() else {
+        return false;
+    };
+
+    is_valid_http_status_line(first_line)
 }
 
 fn is_service_up_port(port: u16, timeout_ms: u64) -> bool {
