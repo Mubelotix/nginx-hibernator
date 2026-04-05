@@ -27,7 +27,7 @@ if [[ "${EUID:-$(id -u)}" -ne 0 && "${HIBERNATOR_RUN_AS_ROOT:-0}" != "1" ]]; the
     printf '[run.sh] could not resolve cargo target directory\n' >&2
     exit 1
   fi
-  MODULE_SO="$TARGET_DIR/release/librandom_gate.so"
+  MODULE_SO="$TARGET_DIR/release/libhibernator.so"
   export TARGET_DIR MODULE_SO
 
   printf '[run.sh] building module as user session\n'
@@ -41,7 +41,7 @@ if [[ -z "$TARGET_DIR" ]]; then
   TARGET_DIR="/tmp/cargo-target"
 fi
 if [[ -z "$MODULE_SO" ]]; then
-  MODULE_SO="$TARGET_DIR/release/librandom_gate.so"
+  MODULE_SO="$TARGET_DIR/release/libhibernator.so"
 fi
 
 log() {

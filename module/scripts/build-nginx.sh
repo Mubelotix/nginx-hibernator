@@ -9,7 +9,7 @@ NGINX_SRC_DIR="$BUILD_DIR/nginx-$NGINX_VERSION"
 NGINX_PREFIX="${NGINX_PREFIX:-$REPO_DIR/.local/nginx}"
 NGINX_TARBALL="$BUILD_DIR/nginx-$NGINX_VERSION.tar.gz"
 TARGET_DIR="${CARGO_TARGET_DIR:-$MODULE_DIR/target}"
-MODULE_SO="$TARGET_DIR/release/librandom_gate.so"
+MODULE_SO="$TARGET_DIR/release/libhibernator.so"
 
 mkdir -p "$BUILD_DIR"
 
@@ -47,4 +47,4 @@ cp "$MODULE_SO" "$NGINX_PREFIX/modules/"
 
 echo "Built nginx binary: $NGINX_PREFIX/sbin/nginx"
 echo "Built module: $MODULE_SO"
-echo "Installed module copy: $NGINX_PREFIX/modules/librandom_gate.so"
+echo "Installed module copy: $NGINX_PREFIX/modules/libhibernator.so"

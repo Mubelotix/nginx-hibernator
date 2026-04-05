@@ -20,7 +20,7 @@ struct Module;
 
 impl http::HttpModule for Module {
     fn module() -> &'static ngx_module_t {
-        unsafe { &*::core::ptr::addr_of!(ngx_http_random_gate_module) }
+        unsafe { &*::core::ptr::addr_of!(ngx_http_hibernator_module) }
     }
 
     unsafe extern "C" fn postconfiguration(cf: *mut ngx_conf_t) -> ngx_int_t {
@@ -36,7 +36,7 @@ unsafe impl HttpModuleLocationConf for Module {
     type LocationConf = ModuleConfig;
 }
 
-static NGX_HTTP_RANDOM_GATE_MODULE_CTX: ngx_http_module_t = ngx_http_module_t {
+static NGX_HTTP_HIBERNATOR_MODULE_CTX: ngx_http_module_t = ngx_http_module_t {
     preconfiguration: Some(Module::preconfiguration),
     postconfiguration: Some(Module::postconfiguration),
     create_main_conf: None,
@@ -48,28 +48,28 @@ static NGX_HTTP_RANDOM_GATE_MODULE_CTX: ngx_http_module_t = ngx_http_module_t {
 };
 
 #[cfg(feature = "export-modules")]
-ngx::ngx_modules!(ngx_http_random_gate_module);
+ngx::ngx_modules!(ngx_http_hibernator_module);
 
 #[used]
 #[allow(non_upper_case_globals)]
 #[cfg_attr(not(feature = "export-modules"), unsafe(no_mangle))]
-pub static mut ngx_http_random_gate_module: ngx_module_t = ngx_module_t {
-    ctx: &raw const NGX_HTTP_RANDOM_GATE_MODULE_CTX as _,
+pub static mut ngx_http_hibernator_module: ngx_module_t = ngx_module_t {
+    ctx: &raw const NGX_HTTP_HIBERNATOR_MODULE_CTX as _,
     commands: unsafe { &raw mut config::NGX_HTTP_HIBERNATOR_COMMANDS[0] },
     type_: NGX_HTTP_MODULE as _,
-    init_process: Some(random_gate_init_process),
+    init_process: Some(hibernator_init_process),
     ..ngx_module_t::default()
 };
 
-unsafe extern "C" fn random_gate_init_process(_cycle: *mut ngx_cycle_t) -> ngx_int_t {
+unsafe extern "C" fn hibernator_init_process(_cycle: *mut ngx_cycle_t) -> ngx_int_t {
     service::init_process();
     check::start_registered_service_health_monitors();
     Status::NGX_OK.into()
 }
 
-struct RandomGateRequestHandler;
+struct HibernatorRequestHandler;
 
-impl RandomGateRequestHandler {
+impl HibernatorRequestHandler {
     fn handler(request: &mut http::Request) -> Status {
         let Some(conf) = Module::location_conf(request) else {
             return Status::NGX_ERROR;
@@ -143,9 +143,9 @@ impl RandomGateRequestHandler {
     }
 }
 
-extern "C" fn random_gate_access_handler(r: *mut ngx_http_request_t) -> ngx_int_t {
+extern "C" fn hibernator_access_handler(r: *mut ngx_http_request_t) -> ngx_int_t {
     let request = unsafe { Request::from_ngx_http_request(r) };
-    RandomGateRequestHandler::handler(request).into()
+    HibernatorRequestHandler::handler(request).into()
 }
 
 unsafe fn register_access_handler(cf: *mut ngx_conf_t) -> Result<(), ()> {
@@ -167,12 +167,12 @@ unsafe fn register_access_handler(cf: *mut ngx_conf_t) -> Result<(), ()> {
     let handlers = &mut cmcf.phases[ngx_http_phases_NGX_HTTP_ACCESS_PHASE as usize].handlers;
     let h = unsafe { ngx_array_push(handlers).cast::<ngx_http_handler_pt>() };
     if h.is_null() {
-        ngx_conf_log_error!(NGX_LOG_EMERG, cf, "failed to register random_gate access handler");
+        ngx_conf_log_error!(NGX_LOG_EMERG, cf, "failed to register hibernator access handler");
         return Err(());
     }
 
     unsafe {
-        *h = Some(random_gate_access_handler);
+        *h = Some(hibernator_access_handler);
     }
     Ok(())
 }

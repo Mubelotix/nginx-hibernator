@@ -318,7 +318,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nginx-random-gate"
+name = "nginx-hibernator"
 version = "0.1.0"
 dependencies = [
  "dbus",

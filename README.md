@@ -213,6 +213,6 @@ cd module
 cargo build --release
 cd ..
 scripts/build-nginx.sh
-scripts/test-random-gate.sh
+scripts/test-hibernator.sh
 scripts/run.sh start
 ```
