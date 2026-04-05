@@ -3,3 +3,5 @@ To help you complete tasks, you make look-up code in the library. It's available
 You may also look into the nginx doc in ./nginx-doc.md (obtained from https://nginx.org/en/docs/dev/development_guide.html).
 
 We don't care about backward-compatibility between changes. However, please keep the ready accurate and up-to-date.
+
+I'm a never-nester, so try avoiding high amounts of nested code blocks. I will tolerate until 3 levels. I have nothing against long functions though.
