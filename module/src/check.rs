@@ -16,7 +16,6 @@ struct ServiceHealthRuntime {
     timeout_ms: AtomicU64,
     up_check_interval_ms: AtomicU64,
     down_check_interval_ms: AtomicU64,
-    next_check_at_ms: AtomicU64,
     endpoint: Mutex<String>,
     is_up: AtomicBool,
 }
@@ -40,7 +39,6 @@ impl ServiceHealthRuntime {
             timeout_ms: AtomicU64::new(100),
             up_check_interval_ms: AtomicU64::new(10_000),
             down_check_interval_ms: AtomicU64::new(60_000),
-            next_check_at_ms: AtomicU64::new(0),
             endpoint: Mutex::new("/ready".to_owned()),
             is_up: AtomicBool::new(false),
         }
@@ -115,9 +113,6 @@ fn apply_health_runtime_config(
         ep.clear();
         ep.push_str(endpoint);
     }
-
-    // Trigger a fast re-check after config updates.
-    runtime.next_check_at_ms.store(0, Ordering::Relaxed);
 }
 
 fn start_health_monitor_task_if_needed() {
@@ -125,37 +120,19 @@ fn start_health_monitor_task_if_needed() {
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
         .is_ok()
     {
-        let spawned = crate::runtime::spawn_future_on_runtime(async {
-            loop {
-                run_health_monitor_iteration_async().await;
-                sleep(Duration::from_millis(250)).await;
-            }
-        })
-        .is_some();
+        let runtimes: Vec<Arc<ServiceHealthRuntime>> = {
+            let map = healths().lock().expect("service health lock poisoned");
+            map.values().cloned().collect()
+        };
 
-        if !spawned {
-            HEALTH_MONITOR_TASK_STARTED.store(false, Ordering::Release);
+        for runtime in runtimes {
+            crate::runtime::spawn_future_on_runtime(monitor_service_health(runtime));
         }
     }
 }
 
-async fn run_health_monitor_iteration_async() {
-    let runtimes: Vec<Arc<ServiceHealthRuntime>> = {
-        let map = healths().lock().expect("service health lock poisoned");
-        map.values().cloned().collect()
-    };
-
-    if runtimes.is_empty() {
-        return;
-    }
-
-    let now = now_millis();
-    for runtime in runtimes {
-        let next_check_at_ms = runtime.next_check_at_ms.load(Ordering::Relaxed);
-        if next_check_at_ms > now {
-            continue;
-        }
-
+async fn monitor_service_health(runtime: Arc<ServiceHealthRuntime>) {
+    loop {
         let is_up = refresh_service_health_async(&runtime).await;
         runtime.is_up.store(is_up, Ordering::Relaxed);
 
@@ -166,17 +143,8 @@ async fn run_health_monitor_iteration_async() {
         }
         .max(1);
 
-        runtime
-            .next_check_at_ms
-            .store(now.saturating_add(interval_ms), Ordering::Relaxed);
+        sleep(Duration::from_millis(interval_ms)).await;
     }
-}
-
-fn now_millis() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis().try_into().unwrap_or(u64::MAX))
-        .unwrap_or(0)
 }
 
 pub fn register_service_health_monitor(

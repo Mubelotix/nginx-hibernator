@@ -9,16 +9,11 @@ use ngx::{ngx_conf_log_error, ngx_string};
 
 use crate::check;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ServiceCheckMode {
+    #[default]
     Http,
     Tcp,
-}
-
-impl Default for ServiceCheckMode {
-    fn default() -> Self {
-        Self::Http
-    }
 }
 
 #[derive(Debug)]
