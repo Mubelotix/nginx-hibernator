@@ -1,6 +1,5 @@
 use std::collections::HashMap;
-use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -289,7 +288,7 @@ pub fn set_service_state(service_id: &str, state: ServiceHealthState) {
 pub fn try_mark_service_starting(service_id: &str) -> bool {
     let runtime = runtime_for(service_id);
     let target = ServiceHealthState::Starting.as_u8();
-    runtime
+    let success = runtime
         .state
         .compare_exchange(
             ServiceHealthState::Unknown.as_u8(),
@@ -306,7 +305,13 @@ pub fn try_mark_service_starting(service_id: &str) -> bool {
                 Ordering::AcqRel,
                 Ordering::Relaxed,
             )
-            .is_ok()
+            .is_ok();
+            
+    if success {
+        runtime.state_change_notify.notify_waiters();
+    }
+    
+    success
 }
 
 async fn refresh_service_health_async(runtime: &ServiceHealthRuntime) -> bool {
@@ -333,13 +338,6 @@ fn mode_from_u8(mode: u8) -> ServiceCheckMode {
     match mode {
         1 => ServiceCheckMode::Tcp,
         _ => ServiceCheckMode::Http,
-    }
-}
-
-pub fn is_service_up(mode: ServiceCheckMode, port: u16, endpoint: &str, timeout_ms: u64) -> bool {
-    match mode {
-        ServiceCheckMode::Http => is_service_up_http(port, endpoint, timeout_ms),
-        ServiceCheckMode::Tcp => is_service_up_port(port, timeout_ms),
     }
 }
 
@@ -388,52 +386,6 @@ async fn is_service_up_http_async(port: u16, endpoint: &str, timeout_ms: u64) ->
         return false;
     };
     let Ok(n) = read_result else {
-        return false;
-    };
-    if n == 0 {
-        return false;
-    }
-
-    let Ok(head) = std::str::from_utf8(&buf[..n]) else {
-        return false;
-    };
-    let Some(first_line) = head.lines().next() else {
-        return false;
-    };
-
-    is_valid_http_status_line(first_line)
-}
-
-fn is_service_up_port(port: u16, timeout_ms: u64) -> bool {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    TcpStream::connect_timeout(&addr, Duration::from_millis(timeout_ms.max(1))).is_ok()
-}
-
-fn is_service_up_http(port: u16, endpoint: &str, timeout_ms: u64) -> bool {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    let timeout = Duration::from_millis(timeout_ms.max(1));
-
-    let Ok(mut stream) = TcpStream::connect_timeout(&addr, timeout) else {
-        return false;
-    };
-
-    if stream.set_read_timeout(Some(timeout)).is_err() {
-        return false;
-    }
-    if stream.set_write_timeout(Some(timeout)).is_err() {
-        return false;
-    }
-
-    let request = format!(
-        "GET {} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
-        endpoint
-    );
-    if stream.write_all(request.as_bytes()).is_err() {
-        return false;
-    }
-
-    let mut buf = [0_u8; 512];
-    let Ok(n) = stream.read(&mut buf) else {
         return false;
     };
     if n == 0 {

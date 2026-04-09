@@ -145,14 +145,8 @@ impl HibernatorRequestHandler {
 
         if !is_up {
             if let Some(service_name) = conf.service_name.as_deref() {
-                service::start_service_async(
-                    service_name,
-                    target_port,
-                    conf.check_mode,
-                    &conf.check_endpoint,
-                    conf.check_timeout_ms,
-                    conf.start_timeout_ms,
-                    conf.start_check_interval_ms,
+                service::initiate_service_start(
+                    service_name.to_owned(),
                 );
                 ngx_log_debug_http!(
                     request,

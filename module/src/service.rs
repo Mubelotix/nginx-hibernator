@@ -1,14 +1,13 @@
-use std::sync::mpsc::{self, Sender};
-use std::sync::OnceLock;
+use tokio::sync::{mpsc::{self, UnboundedSender as Sender}, oneshot::{Sender as OneShotSender, Receiver as OneShotReceiver, channel as oneshot_channel}};
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::Duration;
+use dbus_tokio::connection;
+use dbus::nonblock::{self, Proxy, SyncConnection};
 
 use crate::check;
-use crate::hibernate;
+use crate::runtime::spawn_future_on_runtime;
 use dbus::blocking::Connection;
-
-use crate::config::ServiceCheckMode;
-use crate::check::ServiceHealthState;
 static CONTROLLER_TX: OnceLock<Sender<ControllerCommand>> = OnceLock::new();
 
 enum ControllerAction {
@@ -19,7 +18,7 @@ enum ControllerAction {
 struct ControllerCommand {
     action: ControllerAction,
     service_name: String,
-    reply_tx: Sender<bool>,
+    reply_tx: OneShotSender<bool>,
 }
 
 pub fn init_process() {
@@ -27,24 +26,36 @@ pub fn init_process() {
 }
 
 fn controller_tx() -> &'static Sender<ControllerCommand> {
-    CONTROLLER_TX.get_or_init(|| {
-        let (tx, rx) = mpsc::channel::<ControllerCommand>();
-        thread::spawn(move || {
+    log!("A");
+    let r = CONTROLLER_TX.get_or_init(|| {
+        let (resource, conn) = connection::new_system_sync()
+            .expect("hibernator: failed to connect to D-Bus system bus");
+        let _handle = spawn_future_on_runtime(async move {
+            let err = resource.await;
+            panic!("Lost connection to D-Bus: {}", err);
+        });
+
+        let (tx, mut rx) = mpsc::unbounded_channel::<ControllerCommand>();
+        spawn_future_on_runtime(async move {
             crate::log!("hibernator: internal controller thread started");
-            while let Ok(cmd) = rx.recv() {
+
+            while let Some(cmd) = rx.recv().await {
+                let conn2 = Arc::clone(&conn);
                 let ok = match cmd.action {
-                    ControllerAction::Start => run_service_action(ControllerAction::Start, &cmd.service_name),
-                    ControllerAction::Stop => run_service_action(ControllerAction::Stop, &cmd.service_name),
+                    ControllerAction::Start => run_service_action(ControllerAction::Start, &cmd.service_name, conn2).await,
+                    ControllerAction::Stop => run_service_action(ControllerAction::Stop, &cmd.service_name, conn2).await,
                 };
                 let _ = cmd.reply_tx.send(ok);
             }
         });
         tx
-    })
+    });
+    log!("B");
+    r
 }
 
-fn request_service_action(action: ControllerAction, service_name: &str) -> bool {
-    let (reply_tx, reply_rx) = mpsc::channel::<bool>();
+async fn request_service_action(action: ControllerAction, service_name: &str) -> bool {
+    let (reply_tx, reply_rx) = oneshot_channel();
     let cmd = ControllerCommand {
         action,
         service_name: service_name.to_owned(),
@@ -56,25 +67,21 @@ fn request_service_action(action: ControllerAction, service_name: &str) -> bool 
         return false;
     }
 
-    reply_rx.recv().unwrap_or(false)
+    reply_rx.await.unwrap_or(false)
 }
 
-fn run_service_action(action: ControllerAction, service_name: &str) -> bool {
+async fn run_service_action(action: ControllerAction, service_name: &str, conn: Arc<SyncConnection>) -> bool {
     let unit_name = if service_name.ends_with('.') || service_name.contains('.') {
         service_name.to_owned()
     } else {
         format!("{service_name}.service")
     };
 
-    let Ok(conn) = Connection::new_system() else {
-        crate::elog!("hibernator: failed to connect to system bus");
-        return false;
-    };
-
-    let proxy = conn.with_proxy(
+    let proxy = Proxy::new(
         "org.freedesktop.systemd1",
         "/org/freedesktop/systemd1",
-        Duration::from_secs(5),
+        Duration::from_secs(30),
+        conn
     );
 
     let result = match action {
@@ -83,14 +90,14 @@ fn run_service_action(action: ControllerAction, service_name: &str) -> bool {
                 "org.freedesktop.systemd1.Manager",
                 "StartUnit",
                 (unit_name.as_str(), "replace"),
-            )
+            ).await
         }
         ControllerAction::Stop => {
             proxy.method_call::<(dbus::Path<'static>,), _, _, _>(
                 "org.freedesktop.systemd1.Manager",
                 "StopUnit",
                 (unit_name.as_str(), "replace"),
-            )
+            ).await
         }
     };
 
@@ -106,77 +113,24 @@ fn run_service_action(action: ControllerAction, service_name: &str) -> bool {
     true
 }
 
-pub fn stop_service(service_name: &str) -> bool {
-    request_service_action(ControllerAction::Stop, service_name)
-}
-
-pub fn start_service_async(
-    service_name: &str,
-    target_port: u16,
-    check_mode: ServiceCheckMode,
-    ready_endpoint: &str,
-    ready_timeout_ms: u64,
-    timeout_ms: u64,
-    check_interval_ms: u64,
-) {
-    let service_name_owned = service_name.to_owned();
-    let ready_endpoint_owned = ready_endpoint.to_owned();
-
-    if !check::try_mark_service_starting(&service_name_owned) {
-        return;
-    }
-
-    thread::spawn(move || {
-        crate::log!(
-            "hibernator: scheduling async start for service {}",
-            service_name_owned
-        );
-        let started = start_service_and_wait_ready_inner(
-            &service_name_owned,
-            target_port,
-            check_mode,
-            &ready_endpoint_owned,
-            ready_timeout_ms,
-            timeout_ms,
-            check_interval_ms,
-        );
-
-        if started {
-            check::set_service_state(&service_name_owned, ServiceHealthState::Up);
-            hibernate::mark_service_started(&service_name_owned);
-        } else {
-            check::set_service_state(&service_name_owned, ServiceHealthState::Down);
+pub fn initiate_service_stop(service_name: String) {
+    spawn_future_on_runtime(async move {
+        let stopped = request_service_action(ControllerAction::Stop, &service_name).await;
+        if !stopped {
+            elog!("hibernator: failed to stop service {}", service_name);
         }
     });
 }
 
-fn start_service_and_wait_ready_inner(
-    service_name: &str,
-    target_port: u16,
-    check_mode: ServiceCheckMode,
-    ready_endpoint: &str,
-    ready_timeout_ms: u64,
-    timeout_ms: u64,
-    check_interval_ms: u64,
-) -> bool {
-    crate::log!("hibernator: starting service {}", service_name);
-    if !request_service_action(ControllerAction::Start, service_name) {
-        crate::elog!("hibernator: failed to start service {}", service_name);
-        return false;
+pub fn initiate_service_start(service_name: String) {
+    if !check::try_mark_service_starting(&service_name) {
+        return;
     }
 
-    let interval = check_interval_ms.max(1);
-    let max_checks = timeout_ms.saturating_div(interval).max(1);
-
-    for _ in 0..max_checks {
-        if check::is_service_up(check_mode, target_port, ready_endpoint, ready_timeout_ms) {
-            hibernate::mark_service_started(service_name);
-            crate::log!("hibernator: service {} is ready", service_name);
-            return true;
+    spawn_future_on_runtime(async move {
+        let started = request_service_action(ControllerAction::Start, &service_name).await;
+        if !started {
+            elog!("hibernator: failed to start service {}", service_name);
         }
-        thread::sleep(Duration::from_millis(interval));
-    }
-
-    crate::elog!("hibernator: service {} did not become ready in time", service_name);
-    false
+    });
 }

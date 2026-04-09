@@ -32,7 +32,7 @@ fn start_async_runtime_if_needed() {
         let (handle_tx, handle_rx) = mpsc::channel::<Handle>();
         thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_time()
+                .enable_all()
                 .build()
                 .expect("failed to build hibernator async runtime");
 
