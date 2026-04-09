@@ -26,8 +26,7 @@ pub fn init_process() {
 }
 
 fn controller_tx() -> &'static Sender<ControllerCommand> {
-    log!("A");
-    let r = CONTROLLER_TX.get_or_init(|| {
+    CONTROLLER_TX.get_or_init(|| {
         let (resource, conn) = connection::new_system_sync()
             .expect("hibernator: failed to connect to D-Bus system bus");
         let _handle = spawn_future_on_runtime(async move {
@@ -49,9 +48,7 @@ fn controller_tx() -> &'static Sender<ControllerCommand> {
             }
         });
         tx
-    });
-    log!("B");
-    r
+    })
 }
 
 async fn request_service_action(action: ControllerAction, service_name: &str) -> bool {
