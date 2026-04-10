@@ -7,10 +7,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::timeout;
 
-use crate::config::ServiceCheckMode;
-use crate::history::SERVICE_HISTORY;
-use crate::runtime::spawn_future_on_runtime;
-use crate::state::{ServiceRuntime, now_ms, runtime_for, runtimes};
+use crate::prelude::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ServiceHealthState {
@@ -174,7 +171,7 @@ async fn monitor_service_health(runtime: Arc<ServiceRuntime>) {
             if runtime.state() == ServiceHealthState::Starting {
                 let start = runtime.startup_start_time_ms.load(Ordering::Relaxed);
                 if start > 0 {
-                    let duration = crate::state::now_ms().saturating_sub(start);
+                    let duration = now_ms().saturating_sub(start);
                     if let Some(history_file) = runtime.history_file() {
                         let rt = Arc::clone(&runtime);
                         spawn_future_on_runtime(async move {

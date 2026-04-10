@@ -35,6 +35,7 @@ mod config;
 mod hibernate;
 mod history;
 mod landing;
+mod prelude;
 mod runtime;
 mod service;
 mod state;

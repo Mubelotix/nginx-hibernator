@@ -4,9 +4,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Notify;
 
-use crate::check::ServiceHealthState;
-use crate::hibernate::spawn_idle_monitor;
-use crate::runtime::spawn_future_on_runtime;
+use crate::prelude::*;
 
 pub struct ServiceRuntime {
     pub service_id: String,
@@ -91,7 +89,7 @@ impl ServiceRuntime {
             let count = self.history_samples_count.load(Ordering::Relaxed);
             let rt = Arc::clone(self);
             spawn_future_on_runtime(async move {
-                if let Some(eta) = crate::history::SERVICE_HISTORY.get_eta(&history_file, pctl, count).await {
+                if let Some(eta) = SERVICE_HISTORY.get_eta(&history_file, pctl, count).await {
                     rt.expected_startup_duration_ms.store(eta as u64, Ordering::Relaxed);
                 }
             });

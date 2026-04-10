@@ -7,7 +7,7 @@ use ngx::ffi::{
 use ngx::http::{self, MergeConfigError};
 use ngx::{ngx_conf_log_error, ngx_string};
 
-use crate::check::register_service_health_monitor;
+use crate::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ServiceCheckMode {

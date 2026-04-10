@@ -6,4 +6,4 @@ We don't care about backward-compatibility between changes. However, please keep
 
 I'm a never-nester, so try avoiding high amounts of nested code blocks. I will tolerate until 3 levels. I have nothing against long functions though.
 
-I dislike the fully qualified rust syntax (like crate::log or hibernate::spawn_idle_monitor). Make sure to import stuff instead.
+I dislike the fully qualified rust syntax (like crate::log or hibernate::spawn_idle_monitor). Make sure to import stuff instead. Use a prelude for crate imports.
