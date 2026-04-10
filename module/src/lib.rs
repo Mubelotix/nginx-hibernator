@@ -39,6 +39,7 @@ mod prelude;
 mod runtime;
 mod service;
 mod state;
+mod nginx_async;
 use check::{
     ensure_service_health_monitor, start_registered_service_health_monitors,
 };
@@ -48,7 +49,7 @@ use hibernate::touch_activity;
 use landing::{is_landing_prefixed_uri, serve_landing_page, serve_landing_prefixed_asset};
 use service::{init_process, initiate_service_start};
 
-struct Module;
+pub(crate) struct Module;
 
 impl http::HttpModule for Module {
     fn module() -> &'static ngx_module_t {

@@ -1,9 +1,13 @@
 use core::ptr;
-use std::fs;
 use std::path::{Component, Path, PathBuf};
 use ngx::core::{Buffer, Status};
+use ngx::http::HttpModule;
 use ngx::ffi::{ngx_chain_t, ngx_http_request_t, ngx_int_t};
 use crate::prelude::*;
+use crate::Module;
+use crate::nginx_async::perform_async;
+use core::sync::atomic::Ordering;
+use tokio::fs as async_fs;
 
 unsafe extern "C" {
     fn ngx_http_finalize_request(r: *mut ngx_http_request_t, rc: ngx_int_t);
@@ -19,26 +23,32 @@ pub fn serve_landing_page(
     keep_alive_secs: u64,
 ) -> Status {
     let runtime = runtime_for(service_id);
-    let start = runtime.startup_start_time_ms.load(std::sync::atomic::Ordering::Relaxed);
-    let expected = runtime.expected_startup_duration_ms.load(std::sync::atomic::Ordering::Relaxed);
+    let start = runtime.startup_start_time_ms.load(Ordering::Relaxed);
+    let expected = runtime.expected_startup_duration_ms.load(Ordering::Relaxed);
     let now = now_ms();
 
     let elapsed = if start > 0 { now.saturating_sub(start) } else { 0 };
 
-    if let Some(dir) = landing_dir {
-        if let Some((body, content_type)) = read_landing_index(dir) {
-            let body = apply_eta(body, content_type, elapsed, expected, keep_alive_secs);
-            return send_page_response(request, &body, content_type, http::HTTPStatus::SERVICE_UNAVAILABLE);
-        }
-    }
+    let Some(dir) = landing_dir else {
+        let body = apply_eta(DEFAULT_LANDING_HTML.as_bytes().to_vec(), "text/html; charset=utf-8", elapsed, expected, keep_alive_secs);
+        return send_page_response(request, &body, "text/html; charset=utf-8", http::HTTPStatus::SERVICE_UNAVAILABLE);
+    };
 
-    let body = apply_eta(DEFAULT_LANDING_HTML.as_bytes().to_vec(), "text/html; charset=utf-8", elapsed, expected, keep_alive_secs);
-    send_page_response(
-        request,
-        &body,
-        "text/html; charset=utf-8",
-        http::HTTPStatus::SERVICE_UNAVAILABLE,
-    )
+    let dir = dir.to_owned();
+    let result = perform_async(request, Module::module(), || async move {
+        read_landing_index_async(&dir).await
+    });
+
+    let Some(result) = result else {
+        return Status::NGX_AGAIN;
+    };
+
+    let (body, content_type) = result.unwrap_or_else(|| {
+        (DEFAULT_LANDING_HTML.as_bytes().to_vec(), "text/html; charset=utf-8")
+    });
+
+    let body = apply_eta(body, content_type, elapsed, expected, keep_alive_secs);
+    send_page_response(request, &body, content_type, http::HTTPStatus::SERVICE_UNAVAILABLE)
 }
 
 fn apply_eta(
@@ -78,11 +88,21 @@ pub fn serve_landing_prefixed_asset(request: &mut Request, landing_dir: Option<&
         return http::HTTPStatus::NOT_FOUND.into();
     };
 
-    let Some((body, content_type)) = read_landing_asset_by_rel_path(dir, rel_path) else {
-        return http::HTTPStatus::NOT_FOUND.into();
+    let dir = dir.to_owned();
+    let rel_path = rel_path.to_owned();
+    let result = perform_async(request, Module::module(), || async move {
+        read_landing_asset_by_rel_path_async(&dir, &rel_path).await
+    });
+
+    let Some(result) = result else {
+        return Status::NGX_AGAIN;
     };
 
-    send_page_response(request, &body, content_type, http::HTTPStatus::OK)
+    if let Some((body, content_type)) = result {
+        send_page_response(request, &body, content_type, http::HTTPStatus::OK)
+    } else {
+        http::HTTPStatus::NOT_FOUND.into()
+    }
 }
 
 pub fn is_landing_prefixed_uri(uri: &str) -> bool {
@@ -149,13 +169,16 @@ fn send_page_response(
     }
 }
 
-fn read_landing_index(landing_dir: &str) -> Option<(Vec<u8>, &'static str)> {
-    read_landing_asset_by_rel_path(landing_dir, "index.html")
+async fn read_landing_index_async(landing_dir: &str) -> Option<(Vec<u8>, &'static str)> {
+    read_landing_asset_by_rel_path_async(landing_dir, "index.html").await
 }
 
-fn read_landing_asset_by_rel_path(landing_dir: &str, rel_path: &str) -> Option<(Vec<u8>, &'static str)> {
+async fn read_landing_asset_by_rel_path_async(
+    landing_dir: &str,
+    rel_path: &str,
+) -> Option<(Vec<u8>, &'static str)> {
     let path = resolve_landing_path(landing_dir, rel_path)?;
-    let bytes = fs::read(&path).ok()?;
+    let bytes = async_fs::read(&path).await.ok()?;
     let content_type = content_type_for_path(&path);
     Some((bytes, content_type))
 }
