@@ -1,141 +1,38 @@
-> [!IMPORTANT]  
-> This project is undergoing a massive rewrite to transition from a backend running on the side to a module running inside the nginx process itself.
-
 # nginx-hibernator
 
 Automatically hibernate and wake up nginx-proxied sites based on activity, reducing resource usage for idle services.
 
-You can hibernate any service that:
-- Provides an HTTP API
-- Is proxied by nginx
-- Can be started and stopped by systemd
+This project is an NGINX module that monitors incoming traffic and manages the lifecycle of upstream systemd services.
 
 ## Features
 
-- **Automatic Hibernation**: Services are automatically stopped after a configurable period of inactivity
-- **Seamless Wake-up**: Incoming requests trigger service startup
-- **Landing Page**: Customizable landing page displayed while the service is starting; see [landing/README.md](landing/README.md) for how to build one
-- **Web Dashboard**: Monitor service states, view metrics, and analyze activity patterns through a minimalistic frontend
-- **Persistent Storage**: Request history and state transitions stored in LMDB for efficient querying
-- **Smart ETA Calculation**: Provides startup time estimates based on historical data
-- **Flexible Configuration**: Per-service settings for timeouts, proxy modes, IP filtering, and more
+- **Automatic Hibernation**: Services are automatically stopped after a configurable period of inactivity.
+- **Seamless Wake-up**: Incoming requests trigger service startup.
+- **Asynchronous Landing Page**: Customizable landing page displayed while the service is starting, served without blocking NGINX worker threads.
+- **Smart ETA Calculation**: Provides startup time estimates based on historical data, injected into the landing page.
+- **Systemd Integration**: Directly controls services using `systemd` via dbus or CLI.
+- **Non-blocking Operations**: Health checks and landing page file I/O are performed asynchronously.
 
-## Dashboard
+## Quick Start
 
-The hibernator includes a modern web-based dashboard for monitoring and managing your services:
-
-- **Services Overview**: Real-time view of all services and their current states (up/down/starting)
-- **Service Metrics**: Uptime percentage, hibernation count, and startup time distribution
-- **State History**: Timeline of service state transitions
-- **Request Logs**: Detailed access logs with request metadata and results
-
-Access the dashboard at `http://localhost:7878` (or your configured `hibernator_port`).
-
-## Installing
+The project is currently in development. To use it, you need to build it from source and load it as an NGINX dynamic module.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Mubelotix/nginx-hibernator/master/install.sh | sh
+# Clone the repository
+git clone https://github.com/Mubelotix/nginx-hibernator
+cd nginx-hibernator
+
+# Build the module (requires Rust)
+cd module
+cargo build --release
+
+# Build NGINX with the module (requires helper scripts)
+./module/scripts/build-nginx.sh
 ```
 
-This program cannot be installed as a docker container because it needs to interact with the host's systemd and nginx.
+## Configuration
 
-## Development
-
-### Dependencies
-
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh      # Rust
-sudo apt update && sudo apt install build-essential libdbus-1-dev pkg-config -y
-```
-
-### Building
-
-Backend:
-```bash
-cd backend
-cargo build
-```
-
-Frontend:
-```bash
-cd frontend
-bun install
-bun run build
-```
-
-### Running
-
-Setup a dev environment (one-time only):
-
-```bash
-cd backend/dev
-sh setup.sh
-```
-
-Run the hibernator (it will also build it):
-
-```bash
-cd backend/dev
-sh run.sh
-```
-
-Run the frontend dashboard in development mode:
-
-```bash
-cd frontend
-bun run dev
-```
-
-Check the backend behavior on `http://localhost:80` and the dashboard on `http://localhost:5173`.
-
-## Security considerations
-
-<details>
-<summary>Information to take into account before deploying</summary>
-
-### Access violations
-
-If you are using nginx to restrict access to pages, please note that unless you set `proxy_mode=none` in each site configuration, some requests might bypass nginx and be proxied directly by the hibernator.
-
-If your service handles authentication by itself, you are fine keeping the default.
-
-### Code execution and XSS
-
-The content of the config file is not sanitized.
-**Do not rely on user input to generate the config file.**
-
-Malicious configurations could trigger code execution as root, and XSS injections in waiting pages.
-
-</details>
-
-## Architecture
-
-- **Backend**: Rust-based proxy server and service controller
-  - Monitors nginx access logs for activity
-  - Controls systemd services (start/stop)
-  - Serves API endpoints for the dashboard
-  - Stores data in LMDB (Lightning Memory-Mapped Database)
-  
-- **Frontend**: Vue 3 + TypeScript SPA
-  - Real-time service monitoring
-  - Historical data visualization
-  - Responsive UI built with Tailwind CSS and shadcn-vue components
-
-- **Database**: LMDB-based persistent storage
-  - Connection history with request metadata
-  - Service state transitions with timestamps
-  - Startup duration samples for ETA calculation
-  - Efficient append-only design with range queries
-
-## Alternatives
-
-The only known alternative is [GoDoxy](https://github.com/yusing/go-proxy?tab=readme-ov-file#idlesleeper). Unfortunately, this requires you to ditch nginx entirely for a less-mature proxy, and only supports docker containers rather than any systemd service.
-
-## NGINX Module Configuration Goals
-
-The old backend (`./backend`) had a rich per-site config model. The target is to expose equivalent behavior as clear, optional nginx directives with sane defaults.
-
-### Sample `nginx.conf` (target design)
+Enable hibernation for a specific location in your `nginx.conf` and configure the module using the following directives:
 
 ```nginx
 http {
@@ -144,92 +41,99 @@ http {
   }
 
   server {
-    listen 127.0.0.1:18080;
-    server_name localhost;
+    listen 80;
+    server_name example.com;
 
     location / {
       # Enable hibernation logic for this location.
       hibernator on;
 
-      # Service to wake/suspend.
-      # Required when service control is enabled.
-      hibernator_service_name simple_python_http;
+      # Name of the systemd service to manage.
+      hibernator_service_name my-app-service;
 
-      # TCP port of the upstream app used by the readiness checks.
+      # TCP port of the upstream app used for readiness checks.
       hibernator_check_port 18081;
 
-      # Service readiness check mode.
-      # Values: http | tcp
-      # Default: http
+      # Readiness check mode. Options: http (default) | tcp.
       hibernator_check_mode http;
 
-      # HTTP endpoint used by the http readiness checker.
+      # HTTP endpoint used for readiness checks (only if mode is http).
       # Default: /ready
       hibernator_check_endpoint /ready;
 
-      # Max time allowed for the service to answer readiness checks.
-      # Used by both http and port check modes.
+      # Max time allowed for a single readiness check.
       # Default: 100ms
       hibernator_check_timeout 100ms;
 
-      # Background health monitor interval while the service is up.
-      # Default: 10s
-      hibernator_up_check_interval 10s;
+      # Background health check intervals.
+      hibernator_up_check_interval 10s;       # While service is up
+      hibernator_starting_check_interval 100ms; # While service is starting
+      hibernator_down_check_interval 60s;      # While service is down (hibernated)
 
-      # Background health monitor interval while the service is in starting state.
-      # Default: 100ms
-      hibernator_starting_check_interval 100ms;
-
-      # Background health monitor interval while the service is down.
-      # Default: 60s
-      hibernator_down_check_interval 60s;
-
-      # Keep backend alive after the last qualifying request.
+      # Keep backend alive after the last request for this long.
+      # Default: 5m
       hibernator_keep_alive 5m;
 
-      # Max wait for startup before returning fallback response.
+      # Max time to wait for startup before returning a 503 response.
+      # Default: 5m
       hibernator_start_timeout 5m;
 
-      # Poll interval while waiting for service startup.
+      # Poll interval while waiting for service startup during a request.
+      # Default: 100ms
       hibernator_start_check_interval 100ms;
 
-      # Folder containing landing page files (index + assets).
-      hibernator_landing_dir /var/www/nginx-hibernator/landing;
+      # Folder containing landing page files (index.html + assets).
+      # If not set, the built-in default page is used.
+      hibernator_landing_dir /var/www/landing;
 
-      # Startup ETA model tuning.
-      # Enable ETA feature and startup time tracking
+      # --- Startup ETA Options ---
+
+      # Enable estimation and tracking of startup durations.
       # Default: on
       hibernator_eta on;
 
-      # File where startup durations are stored.
+      # File to store historical startup times for the service.
       # Default: /var/log/nginx/startup-times-{service}.txt
-      hibernator_history_file /var/log/nginx/startup-times-{service}.txt;
+      hibernator_history_file /var/log/nginx/startup-times-myapp.txt;
 
-      # Number of recent samples to consider.
+      # Number of recent samples to use for calculating the ETA.
       # Default: 40
       hibernator_history_samples_count 40;
 
-      # Percentile of the recent samples to use as expected startup time.
+      # Percentile of samples to use as the expected startup time.
       # Default: 95
       hibernator_history_percentile 95;
 
+      # Regular proxy settings.
       proxy_pass http://app_backend;
     }
   }
 }
 ```
 
-Process-level legacy settings like `hibernator_port`, `database_path`, `api_key_sha256`, and deployment path fields are intentionally not planned as nginx directives.
+## Landing Page
 
-Current implementation uses the `hibernator*` directives shown in the sample config above.
+When a service is hibernated, an incoming request triggers its startup. During this time, NGINX returns a `503 Service Unavailable` response with the content of `index.html` from the `hibernator_landing_dir`.
 
-### Build and run helpers
+The following placeholders are automatically replaced in the HTML:
+- `{{ETA_SECONDS}}`: Estimated seconds remaining.
+- `DURATION_MS`: Expected total duration in milliseconds.
+- `DONE_MS`: Elapsed time in milliseconds.
+- `KEEP_ALIVE`: The configured keep-alive duration in seconds.
+
+Assets (images, CSS, JS) from the `hibernator_landing_dir` are served under the `/hibernator-landing/` URI prefix.
+
+## Development
+
+To run a development environment with a sample service:
 
 ```bash
 cd module
-cargo build --release
-cd ..
-scripts/build-nginx.sh
-scripts/test-hibernator.sh
-scripts/run.sh start
+./scripts/run.sh start
 ```
+
+This script builds NGINX, the module, and sets up a test environment.
+
+## Alternatives
+
+- [GoDoxy](https://github.com/yusing/go-proxy): A Go-based proxy with similar features but requires replacing NGINX and only supports Docker.
