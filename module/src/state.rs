@@ -6,6 +6,34 @@ use tokio::sync::Notify;
 
 use crate::prelude::*;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ServiceHealthState {
+    Unknown,
+    Up,
+    Down,
+    Starting,
+}
+
+impl ServiceHealthState {
+    pub fn as_u8(self) -> u8 {
+        match self {
+            ServiceHealthState::Unknown => 0,
+            ServiceHealthState::Up => 1,
+            ServiceHealthState::Down => 2,
+            ServiceHealthState::Starting => 3,
+        }
+    }
+
+    pub fn from_u8(value: u8) -> Self {
+        match value {
+            1 => ServiceHealthState::Up,
+            2 => ServiceHealthState::Down,
+            3 => ServiceHealthState::Starting,
+            _ => ServiceHealthState::Unknown,
+        }
+    }
+}
+
 pub struct ServiceRuntime {
     pub service_id: String,
     pub last_activity_secs: AtomicU64,
@@ -113,6 +141,22 @@ pub fn runtime_for(service_id: &str) -> Arc<ServiceRuntime> {
     spawn_idle_monitor(service_id.to_owned(), Arc::clone(&runtime));
     map.insert(service_id.to_owned(), Arc::clone(&runtime));
     runtime
+}
+
+pub fn is_service_up(service_id: &str) -> bool {
+    get_service_state(service_id) == ServiceHealthState::Up
+}
+
+pub fn get_service_state(service_id: &str) -> ServiceHealthState {
+    let map = runtimes().lock().expect("service runtime lock poisoned");
+    map.get(service_id)
+        .map(|runtime| runtime.state())
+        .unwrap_or(ServiceHealthState::Unknown)
+}
+
+pub fn set_service_state(service_id: &str, state: ServiceHealthState) {
+    let runtime = runtime_for(service_id);
+    runtime.set_state(state);
 }
 
 pub fn now_secs() -> u64 {

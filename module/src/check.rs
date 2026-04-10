@@ -1,3 +1,4 @@
+use crate::prelude::*;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -5,37 +6,10 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::timeout;
-use crate::prelude::*;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ServiceHealthState {
-    Unknown,
-    Up,
-    Down,
-    Starting,
-}
 
-impl ServiceHealthState {
-    pub fn as_u8(self) -> u8 {
-        match self {
-            ServiceHealthState::Unknown => 0,
-            ServiceHealthState::Up => 1,
-            ServiceHealthState::Down => 2,
-            ServiceHealthState::Starting => 3,
-        }
-    }
-
-    pub fn from_u8(value: u8) -> Self {
-        match value {
-            1 => ServiceHealthState::Up,
-            2 => ServiceHealthState::Down,
-            3 => ServiceHealthState::Starting,
-            _ => ServiceHealthState::Unknown,
-        }
-    }
-}
-
-static REGISTERED_MONITORS: LazyLock<Mutex<HashMap<String, ServiceMonitorConfig>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static REGISTERED_MONITORS: LazyLock<Mutex<HashMap<String, ServiceMonitorConfig>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Clone)]
 struct ServiceMonitorConfig {
@@ -51,6 +25,7 @@ struct ServiceMonitorConfig {
     history_samples_count: usize,
     history_percentile: usize,
 }
+
 static HEALTH_MONITOR_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 
 fn registered_monitors() -> &'static Mutex<HashMap<String, ServiceMonitorConfig>> {
@@ -87,6 +62,7 @@ pub fn ensure_service_health_monitor(
     runtime.fetch_eta();
     start_health_monitor_task_if_needed();
 }
+
 fn apply_health_runtime_config(
     runtime: &Arc<ServiceRuntime>,
     mode: ServiceCheckMode,
@@ -102,7 +78,9 @@ fn apply_health_runtime_config(
 ) {
     runtime.mode.store(mode_to_u8(mode), Ordering::Relaxed);
     runtime.port.store(port, Ordering::Relaxed);
-    runtime.timeout_ms.store(timeout_ms.max(1), Ordering::Relaxed);
+    runtime
+        .timeout_ms
+        .store(timeout_ms.max(1), Ordering::Relaxed);
     runtime
         .up_check_interval_ms
         .store(up_check_interval_ms.max(1), Ordering::Relaxed);
@@ -113,8 +91,12 @@ fn apply_health_runtime_config(
         .down_check_interval_ms
         .store(down_check_interval_ms.max(1), Ordering::Relaxed);
 
-    runtime.history_samples_count.store(history_samples_count, Ordering::Relaxed);
-    runtime.history_percentile.store(history_percentile, Ordering::Relaxed);
+    runtime
+        .history_samples_count
+        .store(history_samples_count, Ordering::Relaxed);
+    runtime
+        .history_percentile
+        .store(history_percentile, Ordering::Relaxed);
 
     if let Ok(mut hf) = runtime.history_file.lock() {
         *hf = history_file.map(|s| s.to_string());
@@ -149,16 +131,19 @@ async fn monitor_service_health(runtime: Arc<ServiceRuntime>) {
     loop {
         let interval_ms = match runtime.state() {
             ServiceHealthState::Up => runtime.up_check_interval_ms.load(Ordering::Relaxed),
-            ServiceHealthState::Starting => runtime.starting_check_interval_ms.load(Ordering::Relaxed),
+            ServiceHealthState::Starting => {
+                runtime.starting_check_interval_ms.load(Ordering::Relaxed)
+            }
             ServiceHealthState::Down => runtime.down_check_interval_ms.load(Ordering::Relaxed),
-            ServiceHealthState::Unknown => 0
+            ServiceHealthState::Unknown => 0,
         };
 
         let notified = timeout(
             Duration::from_millis(interval_ms),
             runtime.state_change_notify.notified(),
         )
-        .await.is_ok();
+        .await
+        .is_ok();
 
         if notified {
             continue;
@@ -173,7 +158,9 @@ async fn monitor_service_health(runtime: Arc<ServiceRuntime>) {
                     if let Some(history_file) = runtime.history_file() {
                         let rt = Arc::clone(&runtime);
                         spawn_future_on_runtime(async move {
-                            SERVICE_HISTORY.put_history(&history_file, duration as usize).await;
+                            SERVICE_HISTORY
+                                .put_history(&history_file, duration as usize)
+                                .await;
                             rt.fetch_eta();
                         });
                     }
@@ -185,7 +172,7 @@ async fn monitor_service_health(runtime: Arc<ServiceRuntime>) {
         } else {
             ServiceHealthState::Down
         };
-        runtime.set_state_without_notify(next_state);        
+        runtime.set_state_without_notify(next_state);
     }
 }
 
@@ -248,21 +235,6 @@ pub fn start_registered_service_health_monitors() {
     }
 }
 
-pub fn is_service_up_cached(service_id: &str) -> bool {
-    service_health_state_cached(service_id) == ServiceHealthState::Up
-}
-
-pub fn service_health_state_cached(service_id: &str) -> ServiceHealthState {
-    let map = runtimes().lock().expect("service runtime lock poisoned");
-    map.get(service_id)
-        .map(|runtime| runtime.state())
-        .unwrap_or(ServiceHealthState::Unknown)
-}
-
-pub fn set_service_state(service_id: &str, state: ServiceHealthState) {
-    let runtime = runtime_for(service_id);
-    runtime.set_state(state);
-}
 
 pub fn try_mark_service_starting(service_id: &str) -> bool {
     let runtime = runtime_for(service_id);
@@ -285,13 +257,13 @@ pub fn try_mark_service_starting(service_id: &str) -> bool {
                 Ordering::Relaxed,
             )
             .is_ok();
-            
+
     if success {
         let now = now_ms();
         runtime.startup_start_time_ms.store(now, Ordering::Relaxed);
         runtime.state_change_notify.notify_waiters();
     }
-    
+
     success
 }
 
@@ -322,7 +294,12 @@ fn mode_from_u8(mode: u8) -> ServiceCheckMode {
     }
 }
 
-async fn is_service_up_async(mode: ServiceCheckMode, port: u16, endpoint: &str, timeout_ms: u64) -> bool {
+async fn is_service_up_async(
+    mode: ServiceCheckMode,
+    port: u16,
+    endpoint: &str,
+    timeout_ms: u64,
+) -> bool {
     match mode {
         ServiceCheckMode::Http => is_service_up_http_async(port, endpoint, timeout_ms).await,
         ServiceCheckMode::Tcp => is_service_up_port_async(port, timeout_ms).await,
@@ -343,7 +320,8 @@ async fn is_service_up_http_async(port: u16, endpoint: &str, timeout_ms: u64) ->
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let timeout_dur = Duration::from_millis(timeout_ms.max(1));
 
-    let Ok(connect_result) = timeout(timeout_dur, tokio::net::TcpStream::connect(addr)).await else {
+    let Ok(connect_result) = timeout(timeout_dur, tokio::net::TcpStream::connect(addr)).await
+    else {
         return false;
     };
     let Ok(mut stream) = connect_result else {

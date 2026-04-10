@@ -40,8 +40,9 @@ mod runtime;
 mod service;
 mod state;
 use check::{
-    ensure_service_health_monitor, is_service_up_cached, start_registered_service_health_monitors,
+    ensure_service_health_monitor, start_registered_service_health_monitors,
 };
+use state::is_service_up;
 use config::{ModuleConfig, NGX_HTTP_HIBERNATOR_COMMANDS};
 use hibernate::touch_activity;
 use landing::{is_landing_prefixed_uri, serve_landing_page, serve_landing_prefixed_asset};
@@ -157,7 +158,7 @@ impl HibernatorRequestHandler {
 
         // Request routing must stay fast and non-blocking: use only cached state here.
         // Do not add synchronous health checks on this path.
-        let is_up = is_service_up_cached(&health_service_id);
+        let is_up = is_service_up(&health_service_id);
         ngx_log_debug_http!(
             request,
             "hibernator enabled=1 target_port={} up={}",
