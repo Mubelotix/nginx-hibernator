@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::Notify;
 use tokio::time::timeout;
 
 use crate::config::ServiceCheckMode;
@@ -19,7 +18,7 @@ pub enum ServiceHealthState {
 }
 
 impl ServiceHealthState {
-    fn as_u8(self) -> u8 {
+    pub fn as_u8(self) -> u8 {
         match self {
             ServiceHealthState::Unknown => 0,
             ServiceHealthState::Up => 1,
@@ -28,7 +27,7 @@ impl ServiceHealthState {
         }
     }
 
-    fn from_u8(value: u8) -> Self {
+    pub fn from_u8(value: u8) -> Self {
         match value {
             1 => ServiceHealthState::Up,
             2 => ServiceHealthState::Down,
@@ -38,17 +37,7 @@ impl ServiceHealthState {
     }
 }
 
-struct ServiceHealthRuntime {
-    mode: AtomicU8,
-    port: AtomicU16,
-    timeout_ms: AtomicU64,
-    up_check_interval_ms: AtomicU64,
-    starting_check_interval_ms: AtomicU64,
-    down_check_interval_ms: AtomicU64,
-    endpoint: Mutex<String>,
-    state: AtomicU8,
-    state_change_notify: Notify,
-}
+static REGISTERED_MONITORS: OnceLock<Mutex<HashMap<String, ServiceMonitorConfig>>> = OnceLock::new();
 
 #[derive(Clone)]
 struct ServiceMonitorConfig {
@@ -61,59 +50,10 @@ struct ServiceMonitorConfig {
     starting_check_interval_ms: u64,
     down_check_interval_ms: u64,
 }
-
-impl ServiceHealthRuntime {
-    fn new() -> Self {
-        Self {
-            mode: AtomicU8::new(mode_to_u8(ServiceCheckMode::Http)),
-            port: AtomicU16::new(0),
-            timeout_ms: AtomicU64::new(100),
-            up_check_interval_ms: AtomicU64::new(10_000),
-            starting_check_interval_ms: AtomicU64::new(100),
-            down_check_interval_ms: AtomicU64::new(60_000),
-            endpoint: Mutex::new("/ready".to_owned()),
-            state: AtomicU8::new(ServiceHealthState::Unknown.as_u8()),
-            state_change_notify: Notify::new(),
-        }
-    }
-
-    fn state(&self) -> ServiceHealthState {
-        ServiceHealthState::from_u8(self.state.load(Ordering::Relaxed))
-    }
-
-    fn set_state_without_notify(&self, state: ServiceHealthState) {
-        self.state.store(state.as_u8(), Ordering::Relaxed);
-    }
-
-    fn set_state(&self, state: ServiceHealthState) {
-        let previous = self.state.swap(state.as_u8(), Ordering::AcqRel);
-        if previous != state.as_u8() {
-            self.state_change_notify.notify_waiters();
-        }
-    }
-}
-
-static SERVICE_HEALTHS: OnceLock<Mutex<HashMap<String, Arc<ServiceHealthRuntime>>>> = OnceLock::new();
-static REGISTERED_MONITORS: OnceLock<Mutex<HashMap<String, ServiceMonitorConfig>>> = OnceLock::new();
 static HEALTH_MONITOR_TASK_STARTED: AtomicBool = AtomicBool::new(false);
-
-fn healths() -> &'static Mutex<HashMap<String, Arc<ServiceHealthRuntime>>> {
-    SERVICE_HEALTHS.get_or_init(|| Mutex::new(HashMap::new()))
-}
 
 fn registered_monitors() -> &'static Mutex<HashMap<String, ServiceMonitorConfig>> {
     REGISTERED_MONITORS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn runtime_for(service_id: &str) -> Arc<ServiceHealthRuntime> {
-    let mut map = healths().lock().expect("service health lock poisoned");
-    if let Some(existing) = map.get(service_id) {
-        return Arc::clone(existing);
-    }
-
-    let runtime = Arc::new(ServiceHealthRuntime::new());
-    map.insert(service_id.to_owned(), Arc::clone(&runtime));
-    runtime
 }
 
 pub fn ensure_service_health_monitor(
@@ -126,7 +66,7 @@ pub fn ensure_service_health_monitor(
     starting_check_interval_ms: u64,
     down_check_interval_ms: u64,
 ) {
-    let runtime = runtime_for(service_id);
+    let runtime = crate::state::runtime_for(service_id);
     apply_health_runtime_config(
         &runtime,
         mode,
@@ -141,7 +81,7 @@ pub fn ensure_service_health_monitor(
 }
 
 fn apply_health_runtime_config(
-    runtime: &Arc<ServiceHealthRuntime>,
+    runtime: &Arc<crate::state::ServiceRuntime>,
     mode: ServiceCheckMode,
     port: u16,
     endpoint: &str,
@@ -178,8 +118,8 @@ fn start_health_monitor_task_if_needed() {
         return;
     }
 
-    let runtimes: Vec<Arc<ServiceHealthRuntime>> = {
-        let map = healths().lock().expect("service health lock poisoned");
+    let runtimes: Vec<Arc<crate::state::ServiceRuntime>> = {
+        let map = crate::state::runtimes().lock().expect("service runtime lock poisoned");
         map.values().cloned().collect()
     };
 
@@ -188,7 +128,7 @@ fn start_health_monitor_task_if_needed() {
     }
 }
 
-async fn monitor_service_health(runtime: Arc<ServiceHealthRuntime>) {
+async fn monitor_service_health(runtime: Arc<crate::state::ServiceRuntime>) {
     loop {
         let interval_ms = match runtime.state() {
             ServiceHealthState::Up => runtime.up_check_interval_ms.load(Ordering::Relaxed),
@@ -274,19 +214,19 @@ pub fn is_service_up_cached(service_id: &str) -> bool {
 }
 
 pub fn service_health_state_cached(service_id: &str) -> ServiceHealthState {
-    let map = healths().lock().expect("service health lock poisoned");
+    let map = crate::state::runtimes().lock().expect("service runtime lock poisoned");
     map.get(service_id)
         .map(|runtime| runtime.state())
         .unwrap_or(ServiceHealthState::Unknown)
 }
 
 pub fn set_service_state(service_id: &str, state: ServiceHealthState) {
-    let runtime = runtime_for(service_id);
+    let runtime = crate::state::runtime_for(service_id);
     runtime.set_state(state);
 }
 
 pub fn try_mark_service_starting(service_id: &str) -> bool {
-    let runtime = runtime_for(service_id);
+    let runtime = crate::state::runtime_for(service_id);
     let target = ServiceHealthState::Starting.as_u8();
     let success = runtime
         .state
@@ -314,7 +254,7 @@ pub fn try_mark_service_starting(service_id: &str) -> bool {
     success
 }
 
-async fn refresh_service_health_async(runtime: &ServiceHealthRuntime) -> bool {
+async fn refresh_service_health_async(runtime: &crate::state::ServiceRuntime) -> bool {
     let mode = mode_from_u8(runtime.mode.load(Ordering::Relaxed));
     let port = runtime.port.load(Ordering::Relaxed);
     let timeout_ms = runtime.timeout_ms.load(Ordering::Relaxed).max(1);

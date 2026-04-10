@@ -36,6 +36,7 @@ mod hibernate;
 mod landing;
 mod runtime;
 mod service;
+mod state;
 use config::ModuleConfig;
 use landing::{is_landing_prefixed_uri, serve_landing_page, serve_landing_prefixed_asset};
 

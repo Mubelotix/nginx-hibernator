@@ -1,13 +1,11 @@
-use tokio::sync::{mpsc::{self, UnboundedSender as Sender}, oneshot::{Sender as OneShotSender, Receiver as OneShotReceiver, channel as oneshot_channel}};
+use tokio::sync::{mpsc::{self, UnboundedSender as Sender}, oneshot::{Sender as OneShotSender, channel as oneshot_channel}};
 use std::sync::{Arc, OnceLock};
-use std::thread;
 use std::time::Duration;
 use dbus_tokio::connection;
-use dbus::nonblock::{self, Proxy, SyncConnection};
+use dbus::nonblock::{Proxy, SyncConnection};
 
 use crate::check;
 use crate::runtime::spawn_future_on_runtime;
-use dbus::blocking::Connection;
 static CONTROLLER_TX: OnceLock<Sender<ControllerCommand>> = OnceLock::new();
 
 enum ControllerAction {

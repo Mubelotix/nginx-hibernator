@@ -1,57 +1,24 @@
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::time::sleep;
 
-struct HibernateRuntime {
-    last_activity_secs: AtomicU64,
-    keep_alive_secs: AtomicU64,
-    started_by_module: AtomicBool,
-}
 
-impl HibernateRuntime {
-    fn new() -> Self {
-        Self {
-            last_activity_secs: AtomicU64::new(now_secs()),
-            keep_alive_secs: AtomicU64::new(300),
-            started_by_module: AtomicBool::new(false),
-        }
-    }
-}
-
-static HIBERNATE_RUNTIMES: OnceLock<Mutex<HashMap<String, Arc<HibernateRuntime>>>> = OnceLock::new();
-
-fn runtimes() -> &'static Mutex<HashMap<String, Arc<HibernateRuntime>>> {
-    HIBERNATE_RUNTIMES.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn runtime_for(service_name: &str) -> Arc<HibernateRuntime> {
-    let mut map = runtimes().lock().expect("hibernate runtime lock poisoned");
-    if let Some(existing) = map.get(service_name) {
-        return Arc::clone(existing);
-    }
-
-    let runtime = Arc::new(HibernateRuntime::new());
-    spawn_idle_monitor(service_name.to_owned(), Arc::clone(&runtime));
-    map.insert(service_name.to_owned(), Arc::clone(&runtime));
-    runtime
-}
 
 pub fn touch_activity(service_name: &str, keep_alive_secs: u64) {
-    let rt = runtime_for(service_name);
+    let rt = crate::state::runtime_for(service_name);
     rt.keep_alive_secs.store(keep_alive_secs, Ordering::Relaxed);
-    rt.last_activity_secs.store(now_secs(), Ordering::Relaxed);
+    rt.last_activity_secs.store(crate::state::now_secs(), Ordering::Relaxed);
 }
 
 pub fn mark_service_started(service_name: &str) {
-    let rt = runtime_for(service_name);
+    let rt = crate::state::runtime_for(service_name);
     rt.started_by_module.store(true, Ordering::Relaxed);
-    rt.last_activity_secs.store(now_secs(), Ordering::Relaxed);
+    rt.last_activity_secs.store(crate::state::now_secs(), Ordering::Relaxed);
 }
 
-fn spawn_idle_monitor(service_name: String, runtime: Arc<HibernateRuntime>) {
+pub(crate) fn spawn_idle_monitor(service_name: String, runtime: Arc<crate::state::ServiceRuntime>) {
     let service_name_for_error = service_name.clone();
     let spawned = crate::runtime::spawn_future_on_runtime(async move {
         loop {
@@ -66,7 +33,7 @@ fn spawn_idle_monitor(service_name: String, runtime: Arc<HibernateRuntime>) {
                 continue;
             }
 
-            let now = now_secs();
+            let now = crate::state::now_secs();
             let last = runtime.last_activity_secs.load(Ordering::Relaxed);
             let idle = now.saturating_sub(last);
 
@@ -90,8 +57,4 @@ fn spawn_idle_monitor(service_name: String, runtime: Arc<HibernateRuntime>) {
     }
 }
 
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0_u64, |d| d.as_secs())
-}
+
