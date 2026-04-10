@@ -7,7 +7,6 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::timeout;
 
-
 static REGISTERED_MONITORS: LazyLock<Mutex<HashMap<String, ServiceMonitorConfig>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -118,7 +117,7 @@ fn start_health_monitor_task_if_needed() {
     }
 
     let runtimes: Vec<Arc<ServiceRuntime>> = {
-        let map = runtimes().lock().expect("service runtime lock poisoned");
+        let map = SERVICE_RUNTIMES.lock().expect("service runtime lock poisoned");
         map.values().cloned().collect()
     };
 

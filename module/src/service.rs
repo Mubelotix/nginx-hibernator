@@ -6,8 +6,8 @@ use tokio::sync::{
     mpsc::{self, UnboundedSender as Sender},
     oneshot::{channel as oneshot_channel, Sender as OneShotSender},
 };
-
 use crate::prelude::*;
+
 static CONTROLLER_TX: LazyLock<Sender<ControllerCommand>> = LazyLock::new(|| {
     let (resource, conn) = connection::new_system_sync()
         .expect("hibernator: failed to connect to D-Bus system bus");

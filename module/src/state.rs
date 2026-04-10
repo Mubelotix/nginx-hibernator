@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Notify;
-
 use crate::prelude::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,14 +124,10 @@ impl ServiceRuntime {
     }
 }
 
-static SERVICE_RUNTIMES: LazyLock<Mutex<HashMap<String, Arc<ServiceRuntime>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
-
-pub fn runtimes() -> &'static Mutex<HashMap<String, Arc<ServiceRuntime>>> {
-    &SERVICE_RUNTIMES
-}
+pub static SERVICE_RUNTIMES: LazyLock<Mutex<HashMap<String, Arc<ServiceRuntime>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub fn runtime_for(service_id: &str) -> Arc<ServiceRuntime> {
-    let mut map = runtimes().lock().expect("service runtime lock poisoned");
+    let mut map = SERVICE_RUNTIMES.lock().expect("service runtime lock poisoned");
     if let Some(existing) = map.get(service_id) {
         return Arc::clone(existing);
     }
@@ -148,7 +143,7 @@ pub fn is_service_up(service_id: &str) -> bool {
 }
 
 pub fn get_service_state(service_id: &str) -> ServiceHealthState {
-    let map = runtimes().lock().expect("service runtime lock poisoned");
+    let map = SERVICE_RUNTIMES.lock().expect("service runtime lock poisoned");
     map.get(service_id)
         .map(|runtime| runtime.state())
         .unwrap_or(ServiceHealthState::Unknown)

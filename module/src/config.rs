@@ -1,12 +1,10 @@
 use core::ffi::{c_char, c_void};
-
 use ngx::ffi::{
     ngx_command_t, ngx_conf_t, ngx_str_t, ngx_uint_t, NGX_CONF_TAKE1, NGX_HTTP_LOC_CONF,
     NGX_HTTP_LOC_CONF_OFFSET, NGX_LOG_EMERG,
 };
 use ngx::http::{self, MergeConfigError};
 use ngx::{ngx_conf_log_error, ngx_string};
-
 use crate::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

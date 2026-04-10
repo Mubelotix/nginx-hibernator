@@ -1,9 +1,7 @@
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
-
 use tokio::time::sleep;
-
 use crate::prelude::*;
 
 pub fn touch_activity(service_name: &str, keep_alive_secs: u64) {
