@@ -37,7 +37,10 @@ mod landing;
 mod runtime;
 mod service;
 mod state;
-use config::ModuleConfig;
+use check::{ensure_service_health_monitor, is_service_up_cached, start_registered_service_health_monitors};
+use config::{ModuleConfig, NGX_HTTP_HIBERNATOR_COMMANDS};
+use hibernate::touch_activity;
+use service::{init_process, initiate_service_start};
 use landing::{is_landing_prefixed_uri, serve_landing_page, serve_landing_prefixed_asset};
 
 struct Module;
@@ -79,15 +82,15 @@ ngx::ngx_modules!(ngx_http_hibernator_module);
 #[cfg_attr(not(feature = "export-modules"), unsafe(no_mangle))]
 pub static mut ngx_http_hibernator_module: ngx_module_t = ngx_module_t {
     ctx: &raw const NGX_HTTP_HIBERNATOR_MODULE_CTX as _,
-    commands: unsafe { &raw mut config::NGX_HTTP_HIBERNATOR_COMMANDS[0] },
+    commands: unsafe { &raw mut NGX_HTTP_HIBERNATOR_COMMANDS[0] },
     type_: NGX_HTTP_MODULE as _,
     init_process: Some(hibernator_init_process),
     ..ngx_module_t::default()
 };
 
 unsafe extern "C" fn hibernator_init_process(_cycle: *mut ngx_cycle_t) -> ngx_int_t {
-    service::init_process();
-    check::start_registered_service_health_monitors();
+    init_process();
+    start_registered_service_health_monitors();
     Status::NGX_OK.into()
 }
 
@@ -110,7 +113,7 @@ impl HibernatorRequestHandler {
         }
 
         if let Some(service_name) = conf.service_name.as_deref() {
-            hibernate::touch_activity(service_name, conf.keep_alive_secs);
+            touch_activity(service_name, conf.keep_alive_secs);
         }
 
         let Some(target_port) = conf.target_port else {
@@ -123,7 +126,7 @@ impl HibernatorRequestHandler {
             .clone()
             .unwrap_or_else(|| format!("{}:{}", target_port, conf.check_endpoint));
 
-        check::ensure_service_health_monitor(
+        ensure_service_health_monitor(
             &health_service_id,
             conf.check_mode,
             target_port,
@@ -136,7 +139,7 @@ impl HibernatorRequestHandler {
 
         // Request routing must stay fast and non-blocking: use only cached state here.
         // Do not add synchronous health checks on this path.
-        let is_up = check::is_service_up_cached(&health_service_id);
+        let is_up = is_service_up_cached(&health_service_id);
         ngx_log_debug_http!(
             request,
             "hibernator enabled=1 target_port={} up={}",
@@ -146,7 +149,7 @@ impl HibernatorRequestHandler {
 
         if !is_up {
             if let Some(service_name) = conf.service_name.as_deref() {
-                service::initiate_service_start(
+                initiate_service_start(
                     service_name.to_owned(),
                 );
                 ngx_log_debug_http!(

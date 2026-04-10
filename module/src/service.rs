@@ -4,7 +4,7 @@ use std::time::Duration;
 use dbus_tokio::connection;
 use dbus::nonblock::{Proxy, SyncConnection};
 
-use crate::check;
+use crate::check::try_mark_service_starting;
 use crate::runtime::spawn_future_on_runtime;
 static CONTROLLER_TX: OnceLock<Sender<ControllerCommand>> = OnceLock::new();
 
@@ -34,7 +34,7 @@ fn controller_tx() -> &'static Sender<ControllerCommand> {
 
         let (tx, mut rx) = mpsc::unbounded_channel::<ControllerCommand>();
         spawn_future_on_runtime(async move {
-            crate::log!("hibernator: internal controller thread started");
+            log!("hibernator: internal controller thread started");
 
             while let Some(cmd) = rx.recv().await {
                 let conn2 = Arc::clone(&conn);
@@ -58,7 +58,7 @@ async fn request_service_action(action: ControllerAction, service_name: &str) ->
     };
 
     if controller_tx().send(cmd).is_err() {
-        crate::elog!("hibernator: failed to send command to internal controller");
+        elog!("hibernator: failed to send command to internal controller");
         return false;
     }
 
@@ -101,7 +101,7 @@ async fn run_service_action(action: ControllerAction, service_name: &str, conn: 
             ControllerAction::Start => "start",
             ControllerAction::Stop => "stop",
         };
-        crate::elog!("hibernator: failed to {} service {} via dbus: {}", op, service_name, e);
+        elog!("hibernator: failed to {} service {} via dbus: {}", op, service_name, e);
         return false;
     }
 
@@ -118,7 +118,7 @@ pub fn initiate_service_stop(service_name: String) {
 }
 
 pub fn initiate_service_start(service_name: String) {
-    if !check::try_mark_service_starting(&service_name) {
+    if !try_mark_service_starting(&service_name) {
         return;
     }
 

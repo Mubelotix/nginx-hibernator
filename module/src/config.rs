@@ -7,7 +7,7 @@ use ngx::ffi::{
 use ngx::http::{self, MergeConfigError};
 use ngx::{ngx_conf_log_error, ngx_string};
 
-use crate::check;
+use crate::check::register_service_health_monitor;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ServiceCheckMode {
@@ -105,7 +105,7 @@ impl http::Merge for ModuleConfig {
                     .service_name
                     .clone()
                     .unwrap_or_else(|| format!("{}:{}", target_port, self.check_endpoint));
-                check::register_service_health_monitor(
+                register_service_health_monitor(
                     &health_service_id,
                     self.check_mode,
                     target_port,

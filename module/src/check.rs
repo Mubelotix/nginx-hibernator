@@ -8,6 +8,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::timeout;
 
 use crate::config::ServiceCheckMode;
+use crate::runtime::spawn_future_on_runtime;
+use crate::state::{runtime_for, runtimes, ServiceRuntime};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ServiceHealthState {
@@ -66,7 +68,7 @@ pub fn ensure_service_health_monitor(
     starting_check_interval_ms: u64,
     down_check_interval_ms: u64,
 ) {
-    let runtime = crate::state::runtime_for(service_id);
+    let runtime = runtime_for(service_id);
     apply_health_runtime_config(
         &runtime,
         mode,
@@ -81,7 +83,7 @@ pub fn ensure_service_health_monitor(
 }
 
 fn apply_health_runtime_config(
-    runtime: &Arc<crate::state::ServiceRuntime>,
+    runtime: &Arc<ServiceRuntime>,
     mode: ServiceCheckMode,
     port: u16,
     endpoint: &str,
@@ -118,17 +120,17 @@ fn start_health_monitor_task_if_needed() {
         return;
     }
 
-    let runtimes: Vec<Arc<crate::state::ServiceRuntime>> = {
-        let map = crate::state::runtimes().lock().expect("service runtime lock poisoned");
+    let runtimes: Vec<Arc<ServiceRuntime>> = {
+        let map = runtimes().lock().expect("service runtime lock poisoned");
         map.values().cloned().collect()
     };
 
     for runtime in runtimes {
-        crate::runtime::spawn_future_on_runtime(monitor_service_health(runtime));
+        spawn_future_on_runtime(monitor_service_health(runtime));
     }
 }
 
-async fn monitor_service_health(runtime: Arc<crate::state::ServiceRuntime>) {
+async fn monitor_service_health(runtime: Arc<ServiceRuntime>) {
     loop {
         let interval_ms = match runtime.state() {
             ServiceHealthState::Up => runtime.up_check_interval_ms.load(Ordering::Relaxed),
@@ -214,19 +216,19 @@ pub fn is_service_up_cached(service_id: &str) -> bool {
 }
 
 pub fn service_health_state_cached(service_id: &str) -> ServiceHealthState {
-    let map = crate::state::runtimes().lock().expect("service runtime lock poisoned");
+    let map = runtimes().lock().expect("service runtime lock poisoned");
     map.get(service_id)
         .map(|runtime| runtime.state())
         .unwrap_or(ServiceHealthState::Unknown)
 }
 
 pub fn set_service_state(service_id: &str, state: ServiceHealthState) {
-    let runtime = crate::state::runtime_for(service_id);
+    let runtime = runtime_for(service_id);
     runtime.set_state(state);
 }
 
 pub fn try_mark_service_starting(service_id: &str) -> bool {
-    let runtime = crate::state::runtime_for(service_id);
+    let runtime = runtime_for(service_id);
     let target = ServiceHealthState::Starting.as_u8();
     let success = runtime
         .state
@@ -254,7 +256,7 @@ pub fn try_mark_service_starting(service_id: &str) -> bool {
     success
 }
 
-async fn refresh_service_health_async(runtime: &crate::state::ServiceRuntime) -> bool {
+async fn refresh_service_health_async(runtime: &ServiceRuntime) -> bool {
     let mode = mode_from_u8(runtime.mode.load(Ordering::Relaxed));
     let port = runtime.port.load(Ordering::Relaxed);
     let timeout_ms = runtime.timeout_ms.load(Ordering::Relaxed).max(1);

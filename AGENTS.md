@@ -5,3 +5,5 @@ You may also look into the nginx doc in ./nginx-doc.md (obtained from https://ng
 We don't care about backward-compatibility between changes. However, please keep the ready accurate and up-to-date.
 
 I'm a never-nester, so try avoiding high amounts of nested code blocks. I will tolerate until 3 levels. I have nothing against long functions though.
+
+I dislike the fully qualified rust syntax (like crate::log or hibernate::spawn_idle_monitor). Make sure to import stuff instead.

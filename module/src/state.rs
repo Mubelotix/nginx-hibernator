@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Notify;
 
 use crate::check::ServiceHealthState;
+use crate::hibernate::spawn_idle_monitor;
 
 pub struct ServiceRuntime {
     pub last_activity_secs: AtomicU64,
@@ -70,7 +71,7 @@ pub fn runtime_for(service_id: &str) -> Arc<ServiceRuntime> {
     }
 
     let runtime = Arc::new(ServiceRuntime::new());
-    crate::hibernate::spawn_idle_monitor(service_id.to_owned(), Arc::clone(&runtime));
+    spawn_idle_monitor(service_id.to_owned(), Arc::clone(&runtime));
     map.insert(service_id.to_owned(), Arc::clone(&runtime));
     runtime
 }
