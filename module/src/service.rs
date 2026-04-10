@@ -1,15 +1,17 @@
-use tokio::sync::{mpsc::{self, UnboundedSender as Sender}, oneshot::{Sender as OneShotSender, channel as oneshot_channel}};
+use dbus::nonblock::{Proxy, SyncConnection};
+use dbus_tokio::connection;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
-use dbus_tokio::connection;
-use dbus::nonblock::{Proxy, SyncConnection};
+use tokio::sync::{
+    mpsc::{self, UnboundedSender as Sender},
+    oneshot::{channel as oneshot_channel, Sender as OneShotSender},
+};
 
 use crate::check::try_mark_service_starting;
 use crate::runtime::spawn_future_on_runtime;
-use crate::state::runtime_for;
 static CONTROLLER_TX: OnceLock<Sender<ControllerCommand>> = OnceLock::new();
 
-enum ControllerAction {
+pub(crate) enum ControllerAction {
     Start,
     Stop,
 }
@@ -40,8 +42,12 @@ fn controller_tx() -> &'static Sender<ControllerCommand> {
             while let Some(cmd) = rx.recv().await {
                 let conn2 = Arc::clone(&conn);
                 let ok = match cmd.action {
-                    ControllerAction::Start => run_service_action(ControllerAction::Start, &cmd.service_name, conn2).await,
-                    ControllerAction::Stop => run_service_action(ControllerAction::Stop, &cmd.service_name, conn2).await,
+                    ControllerAction::Start => {
+                        run_service_action(ControllerAction::Start, &cmd.service_name, conn2).await
+                    }
+                    ControllerAction::Stop => {
+                        run_service_action(ControllerAction::Stop, &cmd.service_name, conn2).await
+                    }
                 };
                 let _ = cmd.reply_tx.send(ok);
             }
@@ -50,7 +56,7 @@ fn controller_tx() -> &'static Sender<ControllerCommand> {
     })
 }
 
-async fn request_service_action(action: ControllerAction, service_name: &str) -> bool {
+pub(crate) async fn request_service_action(action: ControllerAction, service_name: &str) -> bool {
     let (reply_tx, reply_rx) = oneshot_channel();
     let cmd = ControllerCommand {
         action,
@@ -66,7 +72,11 @@ async fn request_service_action(action: ControllerAction, service_name: &str) ->
     reply_rx.await.unwrap_or(false)
 }
 
-async fn run_service_action(action: ControllerAction, service_name: &str, conn: Arc<SyncConnection>) -> bool {
+async fn run_service_action(
+    action: ControllerAction,
+    service_name: &str,
+    conn: Arc<SyncConnection>,
+) -> bool {
     let unit_name = if service_name.ends_with('.') || service_name.contains('.') {
         service_name.to_owned()
     } else {
@@ -77,23 +87,27 @@ async fn run_service_action(action: ControllerAction, service_name: &str, conn: 
         "org.freedesktop.systemd1",
         "/org/freedesktop/systemd1",
         Duration::from_secs(30),
-        conn
+        conn,
     );
 
     let result = match action {
         ControllerAction::Start => {
-            proxy.method_call::<(dbus::Path<'static>,), _, _, _>(
-                "org.freedesktop.systemd1.Manager",
-                "StartUnit",
-                (unit_name.as_str(), "replace"),
-            ).await
+            proxy
+                .method_call::<(dbus::Path<'static>,), _, _, _>(
+                    "org.freedesktop.systemd1.Manager",
+                    "StartUnit",
+                    (unit_name.as_str(), "replace"),
+                )
+                .await
         }
         ControllerAction::Stop => {
-            proxy.method_call::<(dbus::Path<'static>,), _, _, _>(
-                "org.freedesktop.systemd1.Manager",
-                "StopUnit",
-                (unit_name.as_str(), "replace"),
-            ).await
+            proxy
+                .method_call::<(dbus::Path<'static>,), _, _, _>(
+                    "org.freedesktop.systemd1.Manager",
+                    "StopUnit",
+                    (unit_name.as_str(), "replace"),
+                )
+                .await
         }
     };
 
@@ -102,28 +116,22 @@ async fn run_service_action(action: ControllerAction, service_name: &str, conn: 
             ControllerAction::Start => "start",
             ControllerAction::Stop => "stop",
         };
-        elog!("hibernator: failed to {} service {} via dbus: {}", op, service_name, e);
+        elog!(
+            "hibernator: failed to {} service {} via dbus: {}",
+            op,
+            service_name,
+            e
+        );
         return false;
     }
 
     true
 }
 
-pub fn initiate_service_stop(service_name: String) {
-    spawn_future_on_runtime(async move {
-        let stopped = request_service_action(ControllerAction::Stop, &service_name).await;
-        if !stopped {
-            elog!("hibernator: failed to stop service {}", service_name);
-        }
-    });
-}
-
 pub fn initiate_service_start(service_name: String) {
     if !try_mark_service_starting(&service_name) {
         return;
     }
-
-    let runtime = runtime_for(&service_name);
 
     spawn_future_on_runtime(async move {
         let started = request_service_action(ControllerAction::Start, &service_name).await;

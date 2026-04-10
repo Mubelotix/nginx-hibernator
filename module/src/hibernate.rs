@@ -4,22 +4,16 @@ use std::time::Duration;
 
 use tokio::time::sleep;
 
-use crate::state::{now_secs, runtime_for, ServiceRuntime};
+use crate::check::ServiceHealthState;
 use crate::runtime::spawn_future_on_runtime;
-use crate::service::initiate_service_stop;
-
-
+use crate::state::{now_secs, runtime_for, ServiceRuntime};
+use crate::service::{request_service_action, ControllerAction};
 
 pub fn touch_activity(service_name: &str, keep_alive_secs: u64) {
     let rt = runtime_for(service_name);
     rt.keep_alive_secs.store(keep_alive_secs, Ordering::Relaxed);
     rt.last_activity_secs.store(now_secs(), Ordering::Relaxed);
-}
-
-pub fn mark_service_started(service_name: &str) {
-    let rt = runtime_for(service_name);
     rt.started_by_module.store(true, Ordering::Relaxed);
-    rt.last_activity_secs.store(now_secs(), Ordering::Relaxed);
 }
 
 pub(crate) fn spawn_idle_monitor(service_name: String, runtime: Arc<ServiceRuntime>) {
@@ -41,14 +35,16 @@ pub(crate) fn spawn_idle_monitor(service_name: String, runtime: Arc<ServiceRunti
             let last = runtime.last_activity_secs.load(Ordering::Relaxed);
             let idle = now.saturating_sub(last);
 
-            if idle >= keep_alive {
+            if idle >= keep_alive && runtime.state() == ServiceHealthState::Up {
                 log!(
                     "hibernator: stopping service {} after {}s of idle time",
                     service_name,
                     idle
                 );
-                initiate_service_stop(service_name.clone());
-                // TODO await
+                let stopped = request_service_action(ControllerAction::Stop, &service_name).await;
+                if !stopped {
+                    elog!("hibernator: failed to stop service {}", service_name);
+                }
             }
         }
     });
@@ -60,5 +56,3 @@ pub(crate) fn spawn_idle_monitor(service_name: String, runtime: Arc<ServiceRunti
         );
     }
 }
-
-
