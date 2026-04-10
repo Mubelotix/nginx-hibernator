@@ -6,8 +6,10 @@ use tokio::sync::Notify;
 
 use crate::check::ServiceHealthState;
 use crate::hibernate::spawn_idle_monitor;
+use crate::runtime::spawn_future_on_runtime;
 
 pub struct ServiceRuntime {
+    pub service_id: String,
     pub last_activity_secs: AtomicU64,
     pub keep_alive_secs: AtomicU64,
     pub started_by_module: AtomicBool,
@@ -21,11 +23,20 @@ pub struct ServiceRuntime {
     pub endpoint: Mutex<String>,
     pub state: AtomicU8,
     pub state_change_notify: Notify,
+    
+    pub startup_start_time_ms: AtomicU64,
+    pub expected_startup_duration_ms: AtomicU64,
+
+    pub eta_enabled: AtomicBool,
+    pub history_file: Mutex<Option<String>>,
+    pub history_samples_count: std::sync::atomic::AtomicUsize,
+    pub history_percentile: std::sync::atomic::AtomicUsize,
 }
 
 impl ServiceRuntime {
-    pub fn new() -> Self {
+    pub fn new(service_id: String) -> Self {
         Self {
+            service_id,
             last_activity_secs: AtomicU64::new(now_secs()),
             keep_alive_secs: AtomicU64::new(300),
             started_by_module: AtomicBool::new(false),
@@ -39,6 +50,12 @@ impl ServiceRuntime {
             endpoint: Mutex::new("/ready".to_owned()),
             state: AtomicU8::new(ServiceHealthState::Unknown.as_u8()),
             state_change_notify: Notify::new(),
+            startup_start_time_ms: AtomicU64::new(0),
+            expected_startup_duration_ms: AtomicU64::new(0),
+            eta_enabled: AtomicBool::new(true),
+            history_file: Mutex::new(None),
+            history_samples_count: std::sync::atomic::AtomicUsize::new(40),
+            history_percentile: std::sync::atomic::AtomicUsize::new(95),
         }
     }
 
@@ -56,6 +73,30 @@ impl ServiceRuntime {
             self.state_change_notify.notify_waiters();
         }
     }
+
+    pub fn history_file(&self) -> Option<String> {
+        if !self.eta_enabled.load(Ordering::Relaxed) {
+            return None;
+        }
+        match self.history_file.lock().unwrap().clone() {
+            Some(r) => Some(r),
+            None => Some(format!("/var/log/nginx/startup-times-{}.txt", self.service_id))
+        }
+    }
+
+    pub fn fetch_eta(self: &Arc<Self>) {
+        let history_file = self.history_file();
+        if let Some(history_file) = history_file {
+            let pctl = self.history_percentile.load(Ordering::Relaxed);
+            let count = self.history_samples_count.load(Ordering::Relaxed);
+            let rt = Arc::clone(self);
+            spawn_future_on_runtime(async move {
+                if let Some(eta) = crate::history::SERVICE_HISTORY.get_eta(&history_file, pctl, count).await {
+                    rt.expected_startup_duration_ms.store(eta as u64, Ordering::Relaxed);
+                }
+            });
+        }
+    }
 }
 
 static SERVICE_RUNTIMES: OnceLock<Mutex<HashMap<String, Arc<ServiceRuntime>>>> = OnceLock::new();
@@ -70,7 +111,7 @@ pub fn runtime_for(service_id: &str) -> Arc<ServiceRuntime> {
         return Arc::clone(existing);
     }
 
-    let runtime = Arc::new(ServiceRuntime::new());
+    let runtime = Arc::new(ServiceRuntime::new(service_id.to_owned()));
     spawn_idle_monitor(service_id.to_owned(), Arc::clone(&runtime));
     map.insert(service_id.to_owned(), Arc::clone(&runtime));
     runtime
@@ -80,4 +121,10 @@ pub fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0_u64, |d| d.as_secs())
+}
+
+pub fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0_u64, |d| d.as_millis() as u64)
 }

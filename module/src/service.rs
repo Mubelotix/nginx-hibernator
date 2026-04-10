@@ -6,6 +6,7 @@ use dbus::nonblock::{Proxy, SyncConnection};
 
 use crate::check::try_mark_service_starting;
 use crate::runtime::spawn_future_on_runtime;
+use crate::state::runtime_for;
 static CONTROLLER_TX: OnceLock<Sender<ControllerCommand>> = OnceLock::new();
 
 enum ControllerAction {
@@ -121,6 +122,8 @@ pub fn initiate_service_start(service_name: String) {
     if !try_mark_service_starting(&service_name) {
         return;
     }
+
+    let runtime = runtime_for(&service_name);
 
     spawn_future_on_runtime(async move {
         let started = request_service_action(ControllerAction::Start, &service_name).await;

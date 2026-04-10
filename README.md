@@ -197,8 +197,21 @@ http {
       hibernator_landing_dir /var/www/nginx-hibernator/landing;
 
       # Startup ETA model tuning.
-      hibernator_eta_sample_size 100;
-      hibernator_eta_percentile 95;
+      # Enable ETA feature and startup time tracking
+      # Default: on
+      hibernator_eta on;
+
+      # File where startup durations are stored.
+      # Default: /var/log/nginx/startup-times-{service}.txt
+      hibernator_history_file /var/log/nginx/startup-times-{service}.txt;
+
+      # Number of recent samples to consider.
+      # Default: 40
+      hibernator_history_samples_count 40;
+
+      # Percentile of the recent samples to use as expected startup time.
+      # Default: 95
+      hibernator_history_percentile 95;
 
       proxy_pass http://app_backend;
     }

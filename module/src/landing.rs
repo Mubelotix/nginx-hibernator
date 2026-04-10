@@ -5,27 +5,66 @@ use std::path::{Component, Path, PathBuf};
 use ngx::core::{Buffer, Status};
 use ngx::ffi::{ngx_chain_t, ngx_http_request_t, ngx_int_t};
 use ngx::http::{self, Request};
+use crate::state::{now_ms, runtime_for};
 
 unsafe extern "C" {
     fn ngx_http_finalize_request(r: *mut ngx_http_request_t, rc: ngx_int_t);
 }
 
-const DEFAULT_LANDING_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Service starting</title><style>body{font-family:system-ui,Segoe UI,sans-serif;margin:40px;color:#222}main{max-width:680px}h1{font-size:1.6rem;margin-bottom:.4rem}p{line-height:1.45}</style></head><body><main><h1>Service is waking up</h1><p>The upstream service is currently hibernated and is being started.</p><p>Please refresh in a few seconds.</p></main></body></html>";
+const DEFAULT_LANDING_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Service starting</title><style>body{font-family:system-ui,Segoe UI,sans-serif;margin:40px;color:#222}main{max-width:680px}h1{font-size:1.6rem;margin-bottom:.4rem}p{line-height:1.45}</style></head><body><main><h1>Service is waking up</h1><p>The upstream service is currently hibernated and is being started.</p><p>Please refresh in a few seconds.</p><p id=\"eta\"></p></main><script>var eta=parseInt('{{ETA_SECONDS}}',10);if(eta>0){var el=document.getElementById('eta');var update=function(){el.innerText='Estimated time left: '+eta+'s';if(eta<=0){location.reload();}eta--;};update();setInterval(update,1000);}</script></body></html>";
 const LANDING_PREFIX: &str = "/hibernator-landing/";
 
-pub fn serve_landing_page(request: &mut Request, landing_dir: Option<&str>) -> Status {
+pub fn serve_landing_page(
+    request: &mut Request,
+    landing_dir: Option<&str>,
+    service_id: &str,
+    keep_alive_secs: u64,
+) -> Status {
+    let runtime = runtime_for(service_id);
+    let start = runtime.startup_start_time_ms.load(std::sync::atomic::Ordering::Relaxed);
+    let expected = runtime.expected_startup_duration_ms.load(std::sync::atomic::Ordering::Relaxed);
+    let now = now_ms();
+
+    let elapsed = if start > 0 { now.saturating_sub(start) } else { 0 };
+
     if let Some(dir) = landing_dir {
         if let Some((body, content_type)) = read_landing_index(dir) {
+            let body = apply_eta(body, content_type, elapsed, expected, keep_alive_secs);
             return send_page_response(request, &body, content_type, http::HTTPStatus::SERVICE_UNAVAILABLE);
         }
     }
 
+    let body = apply_eta(DEFAULT_LANDING_HTML.as_bytes().to_vec(), "text/html; charset=utf-8", elapsed, expected, keep_alive_secs);
     send_page_response(
         request,
-        DEFAULT_LANDING_HTML.as_bytes(),
+        &body,
         "text/html; charset=utf-8",
         http::HTTPStatus::SERVICE_UNAVAILABLE,
     )
+}
+
+fn apply_eta(
+    body: Vec<u8>,
+    content_type: &str,
+    elapsed_ms: u64,
+    expected_ms: u64,
+    keep_alive_secs: u64,
+) -> Vec<u8> {
+    if content_type.starts_with("text/html") {
+        if let Ok(mut body_str) = String::from_utf8(body.clone()) {
+            // Support modern Lottie-based template tags
+            body_str = body_str.replace("KEEP_ALIVE", &keep_alive_secs.to_string());
+            body_str = body_str.replace("DONE_MS", &elapsed_ms.to_string());
+            body_str = body_str.replace("DURATION_MS", &expected_ms.to_string());
+
+            // Support legacy placeholder {{ETA_SECONDS}}
+            let remaining_secs = expected_ms.saturating_sub(elapsed_ms) / 1000;
+            body_str = body_str.replace("{{ETA_SECONDS}}", &remaining_secs.to_string());
+
+            return body_str.into_bytes();
+        }
+    }
+    body
 }
 
 pub fn serve_landing_prefixed_asset(request: &mut Request, landing_dir: Option<&str>) -> Status {

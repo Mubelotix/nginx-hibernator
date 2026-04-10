@@ -1,8 +1,8 @@
 use core::ffi::{c_char, c_void};
 
 use ngx::ffi::{
-    NGX_CONF_TAKE1, NGX_HTTP_LOC_CONF, NGX_HTTP_LOC_CONF_OFFSET, NGX_LOG_EMERG, ngx_command_t,
-    ngx_conf_t, ngx_str_t, ngx_uint_t,
+    ngx_command_t, ngx_conf_t, ngx_str_t, ngx_uint_t, NGX_CONF_TAKE1, NGX_HTTP_LOC_CONF,
+    NGX_HTTP_LOC_CONF_OFFSET, NGX_LOG_EMERG,
 };
 use ngx::http::{self, MergeConfigError};
 use ngx::{ngx_conf_log_error, ngx_string};
@@ -31,6 +31,10 @@ pub struct ModuleConfig {
     pub starting_check_interval_ms: u64,
     pub down_check_interval_ms: u64,
     pub landing_dir: Option<String>,
+    pub eta_enabled: Option<bool>,
+    pub history_file: Option<String>,
+    pub history_samples_count: usize,
+    pub history_percentile: usize,
 }
 
 impl Default for ModuleConfig {
@@ -49,6 +53,10 @@ impl Default for ModuleConfig {
             starting_check_interval_ms: 100,
             down_check_interval_ms: 60_000,
             landing_dir: None,
+            eta_enabled: None,
+            history_file: None,
+            history_samples_count: 40,
+            history_percentile: 95,
         }
     }
 }
@@ -98,6 +106,18 @@ impl http::Merge for ModuleConfig {
         if self.landing_dir.is_none() {
             self.landing_dir = prev.landing_dir.clone();
         }
+        if self.eta_enabled.is_none() {
+            self.eta_enabled = prev.eta_enabled;
+        }
+        if self.history_file == defaults.history_file {
+            self.history_file = prev.history_file.clone();
+        }
+        if self.history_samples_count == defaults.history_samples_count {
+            self.history_samples_count = prev.history_samples_count;
+        }
+        if self.history_percentile == defaults.history_percentile {
+            self.history_percentile = prev.history_percentile;
+        }
 
         if self.enable {
             if let Some(target_port) = self.target_port {
@@ -114,6 +134,13 @@ impl http::Merge for ModuleConfig {
                     self.up_check_interval_ms,
                     self.starting_check_interval_ms,
                     self.down_check_interval_ms,
+                    if self.eta_enabled.unwrap_or(true) {
+                        self.history_file.as_deref()
+                    } else {
+                        None
+                    },
+                    self.history_samples_count,
+                    self.history_percentile,
                 );
             }
         }
@@ -122,7 +149,7 @@ impl http::Merge for ModuleConfig {
     }
 }
 
-pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 14] = [
+pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 18] = [
     ngx_command_t {
         name: ngx_string!("hibernator"),
         type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
@@ -227,6 +254,38 @@ pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 14] = [
         offset: 0,
         post: core::ptr::null_mut(),
     },
+    ngx_command_t {
+        name: ngx_string!("hibernator_history_file"),
+        type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+        set: Some(set_history_file),
+        conf: NGX_HTTP_LOC_CONF_OFFSET,
+        offset: 0,
+        post: core::ptr::null_mut(),
+    },
+    ngx_command_t {
+        name: ngx_string!("hibernator_history_samples_count"),
+        type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+        set: Some(set_history_samples_count),
+        conf: NGX_HTTP_LOC_CONF_OFFSET,
+        offset: 0,
+        post: core::ptr::null_mut(),
+    },
+    ngx_command_t {
+        name: ngx_string!("hibernator_history_percentile"),
+        type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+        set: Some(set_history_percentile),
+        conf: NGX_HTTP_LOC_CONF_OFFSET,
+        offset: 0,
+        post: core::ptr::null_mut(),
+    },
+    ngx_command_t {
+        name: ngx_string!("hibernator_eta"),
+        type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+        set: Some(set_eta_enable),
+        conf: NGX_HTTP_LOC_CONF_OFFSET,
+        offset: 0,
+        post: core::ptr::null_mut(),
+    },
     ngx_command_t::empty(),
 ];
 
@@ -293,7 +352,13 @@ fn parse_duration_secs(mut val: &str) -> Option<u64> {
         1
     };
 
-    val.parse::<u64>().ok().map(|n| if div == 1_000 { n / 1_000 } else { n.saturating_mul(div) })
+    val.parse::<u64>().ok().map(|n| {
+        if div == 1_000 {
+            n / 1_000
+        } else {
+            n.saturating_mul(div)
+        }
+    })
 }
 
 fn arg1(cf: *mut ngx_conf_t) -> Result<String, *mut c_char> {
@@ -309,7 +374,11 @@ fn arg1(cf: *mut ngx_conf_t) -> Result<String, *mut c_char> {
     }
 }
 
-extern "C" fn set_enable(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf: *mut c_void) -> *mut c_char {
+extern "C" fn set_enable(
+    cf: *mut ngx_conf_t,
+    _cmd: *mut ngx_command_t,
+    conf: *mut c_void,
+) -> *mut c_char {
     let Ok(val) = arg1(cf) else {
         return ngx::core::NGX_CONF_ERROR;
     };
@@ -324,7 +393,11 @@ extern "C" fn set_enable(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf: *m
     }
 }
 
-extern "C" fn set_service_name(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf: *mut c_void) -> *mut c_char {
+extern "C" fn set_service_name(
+    cf: *mut ngx_conf_t,
+    _cmd: *mut ngx_command_t,
+    conf: *mut c_void,
+) -> *mut c_char {
     let Ok(val) = arg1(cf) else {
         return ngx::core::NGX_CONF_ERROR;
     };
@@ -337,7 +410,11 @@ extern "C" fn set_service_name(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, co
     ngx::core::NGX_CONF_OK
 }
 
-extern "C" fn set_target_port(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf: *mut c_void) -> *mut c_char {
+extern "C" fn set_target_port(
+    cf: *mut ngx_conf_t,
+    _cmd: *mut ngx_command_t,
+    conf: *mut c_void,
+) -> *mut c_char {
     let Ok(val) = arg1(cf) else {
         return ngx::core::NGX_CONF_ERROR;
     };
@@ -354,7 +431,11 @@ extern "C" fn set_target_port(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, con
     }
 }
 
-extern "C" fn set_keep_alive(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf: *mut c_void) -> *mut c_char {
+extern "C" fn set_keep_alive(
+    cf: *mut ngx_conf_t,
+    _cmd: *mut ngx_command_t,
+    conf: *mut c_void,
+) -> *mut c_char {
     let Ok(val) = arg1(cf) else {
         return ngx::core::NGX_CONF_ERROR;
     };
@@ -368,7 +449,11 @@ extern "C" fn set_keep_alive(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf
     }
 }
 
-extern "C" fn set_start_timeout(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf: *mut c_void) -> *mut c_char {
+extern "C" fn set_start_timeout(
+    cf: *mut ngx_conf_t,
+    _cmd: *mut ngx_command_t,
+    conf: *mut c_void,
+) -> *mut c_char {
     let Ok(val) = arg1(cf) else {
         return ngx::core::NGX_CONF_ERROR;
     };
@@ -382,7 +467,11 @@ extern "C" fn set_start_timeout(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, c
     }
 }
 
-extern "C" fn set_start_check_interval(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf: *mut c_void) -> *mut c_char {
+extern "C" fn set_start_check_interval(
+    cf: *mut ngx_conf_t,
+    _cmd: *mut ngx_command_t,
+    conf: *mut c_void,
+) -> *mut c_char {
     let Ok(val) = arg1(cf) else {
         return ngx::core::NGX_CONF_ERROR;
     };
@@ -396,7 +485,11 @@ extern "C" fn set_start_check_interval(cf: *mut ngx_conf_t, _cmd: *mut ngx_comma
     }
 }
 
-extern "C" fn set_check_mode(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf: *mut c_void) -> *mut c_char {
+extern "C" fn set_check_mode(
+    cf: *mut ngx_conf_t,
+    _cmd: *mut ngx_command_t,
+    conf: *mut c_void,
+) -> *mut c_char {
     let Ok(val) = arg1(cf) else {
         return ngx::core::NGX_CONF_ERROR;
     };
@@ -405,12 +498,20 @@ extern "C" fn set_check_mode(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf
         conf.check_mode = mode;
         ngx::core::NGX_CONF_OK
     } else {
-        ngx_conf_log_error!(NGX_LOG_EMERG, cf, "invalid service check mode: use `http` or `tcp`");
+        ngx_conf_log_error!(
+            NGX_LOG_EMERG,
+            cf,
+            "invalid service check mode: use `http` or `tcp`"
+        );
         ngx::core::NGX_CONF_ERROR
     }
 }
 
-extern "C" fn set_check_endpoint(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf: *mut c_void) -> *mut c_char {
+extern "C" fn set_check_endpoint(
+    cf: *mut ngx_conf_t,
+    _cmd: *mut ngx_command_t,
+    conf: *mut c_void,
+) -> *mut c_char {
     let Ok(val) = arg1(cf) else {
         return ngx::core::NGX_CONF_ERROR;
     };
@@ -427,7 +528,11 @@ extern "C" fn set_check_endpoint(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, 
     ngx::core::NGX_CONF_OK
 }
 
-extern "C" fn set_check_timeout(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf: *mut c_void) -> *mut c_char {
+extern "C" fn set_check_timeout(
+    cf: *mut ngx_conf_t,
+    _cmd: *mut ngx_command_t,
+    conf: *mut c_void,
+) -> *mut c_char {
     let Ok(val) = arg1(cf) else {
         return ngx::core::NGX_CONF_ERROR;
     };
@@ -441,7 +546,11 @@ extern "C" fn set_check_timeout(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, c
     }
 }
 
-extern "C" fn set_up_check_interval(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf: *mut c_void) -> *mut c_char {
+extern "C" fn set_up_check_interval(
+    cf: *mut ngx_conf_t,
+    _cmd: *mut ngx_command_t,
+    conf: *mut c_void,
+) -> *mut c_char {
     let Ok(val) = arg1(cf) else {
         return ngx::core::NGX_CONF_ERROR;
     };
@@ -455,7 +564,11 @@ extern "C" fn set_up_check_interval(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_
     }
 }
 
-extern "C" fn set_starting_check_interval(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf: *mut c_void) -> *mut c_char {
+extern "C" fn set_starting_check_interval(
+    cf: *mut ngx_conf_t,
+    _cmd: *mut ngx_command_t,
+    conf: *mut c_void,
+) -> *mut c_char {
     let Ok(val) = arg1(cf) else {
         return ngx::core::NGX_CONF_ERROR;
     };
@@ -469,7 +582,11 @@ extern "C" fn set_starting_check_interval(cf: *mut ngx_conf_t, _cmd: *mut ngx_co
     }
 }
 
-extern "C" fn set_down_check_interval(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf: *mut c_void) -> *mut c_char {
+extern "C" fn set_down_check_interval(
+    cf: *mut ngx_conf_t,
+    _cmd: *mut ngx_command_t,
+    conf: *mut c_void,
+) -> *mut c_char {
     let Ok(val) = arg1(cf) else {
         return ngx::core::NGX_CONF_ERROR;
     };
@@ -483,7 +600,11 @@ extern "C" fn set_down_check_interval(cf: *mut ngx_conf_t, _cmd: *mut ngx_comman
     }
 }
 
-extern "C" fn set_landing_dir(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, conf: *mut c_void) -> *mut c_char {
+extern "C" fn set_landing_dir(
+    cf: *mut ngx_conf_t,
+    _cmd: *mut ngx_command_t,
+    conf: *mut c_void,
+) -> *mut c_char {
     let Ok(val) = arg1(cf) else {
         return ngx::core::NGX_CONF_ERROR;
     };
@@ -496,3 +617,88 @@ extern "C" fn set_landing_dir(cf: *mut ngx_conf_t, _cmd: *mut ngx_command_t, con
     ngx::core::NGX_CONF_OK
 }
 
+extern "C" fn set_history_file(
+    cf: *mut ngx_conf_t,
+    _cmd: *mut ngx_command_t,
+    conf: *mut c_void,
+) -> *mut c_char {
+    let Ok(val) = arg1(cf) else {
+        return ngx::core::NGX_CONF_ERROR;
+    };
+    let conf = unsafe { &mut *(conf as *mut ModuleConfig) };
+    if val.is_empty() {
+        ngx_conf_log_error!(NGX_LOG_EMERG, cf, "history file cannot be empty");
+        return ngx::core::NGX_CONF_ERROR;
+    }
+    conf.history_file = Some(val);
+    ngx::core::NGX_CONF_OK
+}
+
+extern "C" fn set_history_samples_count(
+    cf: *mut ngx_conf_t,
+    _cmd: *mut ngx_command_t,
+    conf: *mut c_void,
+) -> *mut c_char {
+    let Ok(val) = arg1(cf) else {
+        return ngx::core::NGX_CONF_ERROR;
+    };
+    let conf = unsafe { &mut *(conf as *mut ModuleConfig) };
+    match val.parse::<usize>() {
+        Ok(v) if v > 0 => {
+            conf.history_samples_count = v;
+            ngx::core::NGX_CONF_OK
+        }
+        _ => {
+            ngx_conf_log_error!(
+                NGX_LOG_EMERG,
+                cf,
+                "history samples count must be a valid positive integer"
+            );
+            ngx::core::NGX_CONF_ERROR
+        }
+    }
+}
+
+extern "C" fn set_history_percentile(
+    cf: *mut ngx_conf_t,
+    _cmd: *mut ngx_command_t,
+    conf: *mut c_void,
+) -> *mut c_char {
+    let Ok(val) = arg1(cf) else {
+        return ngx::core::NGX_CONF_ERROR;
+    };
+    let conf = unsafe { &mut *(conf as *mut ModuleConfig) };
+    match val.parse::<usize>() {
+        Ok(v) if v <= 100 => {
+            conf.history_percentile = v;
+            ngx::core::NGX_CONF_OK
+        }
+        _ => {
+            ngx_conf_log_error!(
+                NGX_LOG_EMERG,
+                cf,
+                "history percentile must be an integer between 0 and 100"
+            );
+            ngx::core::NGX_CONF_ERROR
+        }
+    }
+}
+
+extern "C" fn set_eta_enable(
+    cf: *mut ngx_conf_t,
+    _cmd: *mut ngx_command_t,
+    conf: *mut c_void,
+) -> *mut c_char {
+    let Ok(val) = arg1(cf) else {
+        return ngx::core::NGX_CONF_ERROR;
+    };
+
+    let conf = unsafe { &mut *(conf as *mut ModuleConfig) };
+    if let Some(enable) = parse_on_off(&val) {
+        conf.eta_enabled = Some(enable);
+        ngx::core::NGX_CONF_OK
+    } else {
+        ngx_conf_log_error!(NGX_LOG_EMERG, cf, "invalid value: use `on` or `off`");
+        ngx::core::NGX_CONF_ERROR
+    }
+}

@@ -1,9 +1,9 @@
 use ngx::core::Status;
 use ngx::ffi::{
+    ngx_array_push, ngx_conf_t, ngx_cycle_t, ngx_http_conf_ctx_t, ngx_http_core_main_conf_t,
+    ngx_http_core_module, ngx_http_handler_pt, ngx_http_module_t,
+    ngx_http_phases_NGX_HTTP_ACCESS_PHASE, ngx_http_request_t, ngx_int_t, ngx_module_t,
     NGX_HTTP_MODULE, NGX_LOG_EMERG,
-    ngx_array_push, ngx_conf_t, ngx_http_conf_ctx_t, ngx_http_core_main_conf_t,
-    ngx_http_core_module, ngx_http_handler_pt, ngx_http_module_t, ngx_http_phases_NGX_HTTP_ACCESS_PHASE,
-    ngx_http_request_t, ngx_int_t, ngx_module_t, ngx_cycle_t,
 };
 use ngx::http::{self, HttpModule, HttpModuleLocationConf, Request};
 use ngx::{ngx_conf_log_error, ngx_log_debug_http};
@@ -30,18 +30,21 @@ macro_rules! elog {
     };
 }
 
-mod config;
 mod check;
+mod config;
 mod hibernate;
+mod history;
 mod landing;
 mod runtime;
 mod service;
 mod state;
-use check::{ensure_service_health_monitor, is_service_up_cached, start_registered_service_health_monitors};
+use check::{
+    ensure_service_health_monitor, is_service_up_cached, start_registered_service_health_monitors,
+};
 use config::{ModuleConfig, NGX_HTTP_HIBERNATOR_COMMANDS};
 use hibernate::touch_activity;
-use service::{init_process, initiate_service_start};
 use landing::{is_landing_prefixed_uri, serve_landing_page, serve_landing_prefixed_asset};
+use service::{init_process, initiate_service_start};
 
 struct Module;
 
@@ -116,15 +119,22 @@ impl HibernatorRequestHandler {
             touch_activity(service_name, conf.keep_alive_secs);
         }
 
-        let Some(target_port) = conf.target_port else {
-            ngx_log_debug_http!(request, "hibernator enabled=1 missing target_port, serving landing");
-            return serve_landing_page(request, conf.landing_dir.as_deref());
-        };
+        let health_service_id = conf.service_name.clone().unwrap_or_else(|| {
+            format!("{}:{}", conf.target_port.unwrap_or(0), conf.check_endpoint)
+        });
 
-        let health_service_id = conf
-            .service_name
-            .clone()
-            .unwrap_or_else(|| format!("{}:{}", target_port, conf.check_endpoint));
+        let Some(target_port) = conf.target_port else {
+            ngx_log_debug_http!(
+                request,
+                "hibernator enabled=1 missing target_port, serving landing"
+            );
+            return serve_landing_page(
+                request,
+                conf.landing_dir.as_deref(),
+                &health_service_id,
+                conf.keep_alive_secs,
+            );
+        };
 
         ensure_service_health_monitor(
             &health_service_id,
@@ -135,6 +145,13 @@ impl HibernatorRequestHandler {
             conf.up_check_interval_ms,
             conf.starting_check_interval_ms,
             conf.down_check_interval_ms,
+            if conf.eta_enabled.unwrap_or(true) {
+                conf.history_file.as_deref()
+            } else {
+                None
+            },
+            conf.history_samples_count,
+            conf.history_percentile,
         );
 
         // Request routing must stay fast and non-blocking: use only cached state here.
@@ -149,16 +166,19 @@ impl HibernatorRequestHandler {
 
         if !is_up {
             if let Some(service_name) = conf.service_name.as_deref() {
-                initiate_service_start(
-                    service_name.to_owned(),
-                );
+                initiate_service_start(service_name.to_owned());
                 ngx_log_debug_http!(
                     request,
                     "hibernator start scheduled service={}",
                     service_name
                 );
             }
-            serve_landing_page(request, conf.landing_dir.as_deref())
+            serve_landing_page(
+                request,
+                conf.landing_dir.as_deref(),
+                &health_service_id,
+                conf.keep_alive_secs,
+            )
         } else {
             Status::NGX_DECLINED
         }
@@ -189,7 +209,11 @@ unsafe fn register_access_handler(cf: *mut ngx_conf_t) -> Result<(), ()> {
     let handlers = &mut cmcf.phases[ngx_http_phases_NGX_HTTP_ACCESS_PHASE as usize].handlers;
     let h = unsafe { ngx_array_push(handlers).cast::<ngx_http_handler_pt>() };
     if h.is_null() {
-        ngx_conf_log_error!(NGX_LOG_EMERG, cf, "failed to register hibernator access handler");
+        ngx_conf_log_error!(
+            NGX_LOG_EMERG,
+            cf,
+            "failed to register hibernator access handler"
+        );
         return Err(());
     }
 

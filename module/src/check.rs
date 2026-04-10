@@ -8,8 +8,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::timeout;
 
 use crate::config::ServiceCheckMode;
+use crate::history::SERVICE_HISTORY;
 use crate::runtime::spawn_future_on_runtime;
-use crate::state::{runtime_for, runtimes, ServiceRuntime};
+use crate::state::{ServiceRuntime, now_ms, runtime_for, runtimes};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ServiceHealthState {
@@ -51,6 +52,9 @@ struct ServiceMonitorConfig {
     up_check_interval_ms: u64,
     starting_check_interval_ms: u64,
     down_check_interval_ms: u64,
+    history_file: Option<String>,
+    history_samples_count: usize,
+    history_percentile: usize,
 }
 static HEALTH_MONITOR_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 
@@ -67,6 +71,9 @@ pub fn ensure_service_health_monitor(
     up_check_interval_ms: u64,
     starting_check_interval_ms: u64,
     down_check_interval_ms: u64,
+    history_file: Option<&str>,
+    history_samples_count: usize,
+    history_percentile: usize,
 ) {
     let runtime = runtime_for(service_id);
     apply_health_runtime_config(
@@ -78,10 +85,13 @@ pub fn ensure_service_health_monitor(
         up_check_interval_ms,
         starting_check_interval_ms,
         down_check_interval_ms,
+        history_file,
+        history_samples_count,
+        history_percentile,
     );
+    runtime.fetch_eta();
     start_health_monitor_task_if_needed();
 }
-
 fn apply_health_runtime_config(
     runtime: &Arc<ServiceRuntime>,
     mode: ServiceCheckMode,
@@ -91,6 +101,9 @@ fn apply_health_runtime_config(
     up_check_interval_ms: u64,
     starting_check_interval_ms: u64,
     down_check_interval_ms: u64,
+    history_file: Option<&str>,
+    history_samples_count: usize,
+    history_percentile: usize,
 ) {
     runtime.mode.store(mode_to_u8(mode), Ordering::Relaxed);
     runtime.port.store(port, Ordering::Relaxed);
@@ -104,6 +117,13 @@ fn apply_health_runtime_config(
     runtime
         .down_check_interval_ms
         .store(down_check_interval_ms.max(1), Ordering::Relaxed);
+
+    runtime.history_samples_count.store(history_samples_count, Ordering::Relaxed);
+    runtime.history_percentile.store(history_percentile, Ordering::Relaxed);
+
+    if let Ok(mut hf) = runtime.history_file.lock() {
+        *hf = history_file.map(|s| s.to_string());
+    }
 
     if let Ok(mut ep) = runtime.endpoint.lock() {
         ep.clear();
@@ -151,6 +171,19 @@ async fn monitor_service_health(runtime: Arc<ServiceRuntime>) {
 
         let is_up = refresh_service_health_async(&runtime).await;
         let next_state = if is_up {
+            if runtime.state() == ServiceHealthState::Starting {
+                let start = runtime.startup_start_time_ms.load(Ordering::Relaxed);
+                if start > 0 {
+                    let duration = crate::state::now_ms().saturating_sub(start);
+                    if let Some(history_file) = runtime.history_file() {
+                        let rt = Arc::clone(&runtime);
+                        spawn_future_on_runtime(async move {
+                            SERVICE_HISTORY.put_history(&history_file, duration as usize).await;
+                            rt.fetch_eta();
+                        });
+                    }
+                }
+            }
             ServiceHealthState::Up
         } else if runtime.state() == ServiceHealthState::Starting {
             ServiceHealthState::Starting
@@ -170,6 +203,9 @@ pub fn register_service_health_monitor(
     up_check_interval_ms: u64,
     starting_check_interval_ms: u64,
     down_check_interval_ms: u64,
+    history_file: Option<&str>,
+    history_samples_count: usize,
+    history_percentile: usize,
 ) {
     let mut map = registered_monitors()
         .lock()
@@ -185,6 +221,9 @@ pub fn register_service_health_monitor(
             up_check_interval_ms,
             starting_check_interval_ms,
             down_check_interval_ms,
+            history_file: history_file.map(|s| s.to_owned()),
+            history_samples_count,
+            history_percentile,
         },
     );
 }
@@ -207,6 +246,9 @@ pub fn start_registered_service_health_monitors() {
             cfg.up_check_interval_ms,
             cfg.starting_check_interval_ms,
             cfg.down_check_interval_ms,
+            cfg.history_file.as_deref(),
+            cfg.history_samples_count,
+            cfg.history_percentile,
         );
     }
 }
@@ -250,6 +292,8 @@ pub fn try_mark_service_starting(service_id: &str) -> bool {
             .is_ok();
             
     if success {
+        let now = now_ms();
+        runtime.startup_start_time_ms.store(now, Ordering::Relaxed);
         runtime.state_change_notify.notify_waiters();
     }
     
