@@ -1,12 +1,10 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
-
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::timeout;
-
 use crate::prelude::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,7 +35,7 @@ impl ServiceHealthState {
     }
 }
 
-static REGISTERED_MONITORS: OnceLock<Mutex<HashMap<String, ServiceMonitorConfig>>> = OnceLock::new();
+static REGISTERED_MONITORS: LazyLock<Mutex<HashMap<String, ServiceMonitorConfig>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Clone)]
 struct ServiceMonitorConfig {
@@ -56,7 +54,7 @@ struct ServiceMonitorConfig {
 static HEALTH_MONITOR_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 
 fn registered_monitors() -> &'static Mutex<HashMap<String, ServiceMonitorConfig>> {
-    REGISTERED_MONITORS.get_or_init(|| Mutex::new(HashMap::new()))
+    &REGISTERED_MONITORS
 }
 
 pub fn ensure_service_health_monitor(

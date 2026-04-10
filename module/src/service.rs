@@ -1,6 +1,6 @@
 use dbus::nonblock::{Proxy, SyncConnection};
 use dbus_tokio::connection;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tokio::sync::{
     mpsc::{self, UnboundedSender as Sender},
@@ -8,7 +8,33 @@ use tokio::sync::{
 };
 
 use crate::prelude::*;
-static CONTROLLER_TX: OnceLock<Sender<ControllerCommand>> = OnceLock::new();
+static CONTROLLER_TX: LazyLock<Sender<ControllerCommand>> = LazyLock::new(|| {
+    let (resource, conn) = connection::new_system_sync()
+        .expect("hibernator: failed to connect to D-Bus system bus");
+    let _handle = spawn_future_on_runtime(async move {
+        let err = resource.await;
+        panic!("Lost connection to D-Bus: {}", err);
+    });
+
+    let (tx, mut rx) = mpsc::unbounded_channel::<ControllerCommand>();
+    spawn_future_on_runtime(async move {
+        log!("hibernator: internal controller thread started");
+
+        while let Some(cmd) = rx.recv().await {
+            let conn2 = Arc::clone(&conn);
+            let ok = match cmd.action {
+                ControllerAction::Start => {
+                    run_service_action(ControllerAction::Start, &cmd.service_name, conn2).await
+                }
+                ControllerAction::Stop => {
+                    run_service_action(ControllerAction::Stop, &cmd.service_name, conn2).await
+                }
+            };
+            let _ = cmd.reply_tx.send(ok);
+        }
+    });
+    tx
+});
 
 pub(crate) enum ControllerAction {
     Start,
@@ -26,33 +52,7 @@ pub fn init_process() {
 }
 
 fn controller_tx() -> &'static Sender<ControllerCommand> {
-    CONTROLLER_TX.get_or_init(|| {
-        let (resource, conn) = connection::new_system_sync()
-            .expect("hibernator: failed to connect to D-Bus system bus");
-        let _handle = spawn_future_on_runtime(async move {
-            let err = resource.await;
-            panic!("Lost connection to D-Bus: {}", err);
-        });
-
-        let (tx, mut rx) = mpsc::unbounded_channel::<ControllerCommand>();
-        spawn_future_on_runtime(async move {
-            log!("hibernator: internal controller thread started");
-
-            while let Some(cmd) = rx.recv().await {
-                let conn2 = Arc::clone(&conn);
-                let ok = match cmd.action {
-                    ControllerAction::Start => {
-                        run_service_action(ControllerAction::Start, &cmd.service_name, conn2).await
-                    }
-                    ControllerAction::Stop => {
-                        run_service_action(ControllerAction::Stop, &cmd.service_name, conn2).await
-                    }
-                };
-                let _ = cmd.reply_tx.send(ok);
-            }
-        });
-        tx
-    })
+    &CONTROLLER_TX
 }
 
 pub(crate) async fn request_service_action(action: ControllerAction, service_name: &str) -> bool {

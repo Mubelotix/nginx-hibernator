@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Notify;
 
@@ -97,10 +97,10 @@ impl ServiceRuntime {
     }
 }
 
-static SERVICE_RUNTIMES: OnceLock<Mutex<HashMap<String, Arc<ServiceRuntime>>>> = OnceLock::new();
+static SERVICE_RUNTIMES: LazyLock<Mutex<HashMap<String, Arc<ServiceRuntime>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub fn runtimes() -> &'static Mutex<HashMap<String, Arc<ServiceRuntime>>> {
-    SERVICE_RUNTIMES.get_or_init(|| Mutex::new(HashMap::new()))
+    &SERVICE_RUNTIMES
 }
 
 pub fn runtime_for(service_id: &str) -> Arc<ServiceRuntime> {
