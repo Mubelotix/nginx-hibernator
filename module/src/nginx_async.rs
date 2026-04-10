@@ -4,8 +4,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use core::mem;
 use ngx::ffi::{
-    ngx_event_t, ngx_connection_t, ngx_post_event, ngx_posted_events, ngx_posted_next_events,
-    ngx_module_t,
+    ngx_add_timer, ngx_connection_t, ngx_del_timer, ngx_delete_posted_event, ngx_event_t,
+    ngx_module_t, ngx_post_event, ngx_posted_events, ngx_posted_next_events,
 };
 use tokio::task::JoinHandle;
 
@@ -35,22 +35,30 @@ impl<T> Drop for AsyncCTX<T> {
         }
 
         if self.event.posted() != 0 {
-            unsafe { ngx::ffi::ngx_delete_posted_event(&raw mut self.event) };
+            unsafe { ngx_delete_posted_event(&raw mut self.event) };
+        }
+
+        if self.event.timer_set() != 0 {
+            unsafe { ngx_del_timer(&raw mut self.event) };
         }
     }
 }
 
+/// Polling handler for asynchronous work.
 pub unsafe extern "C" fn check_async_work_done<T>(event: *mut ngx_event_t) {
     let ctx_ptr = ngx::ngx_container_of!(event, AsyncCTX<T>, event);
     let ctx = unsafe { &*ctx_ptr };
     let c: *mut ngx_connection_t = unsafe { (*event).data.cast() };
 
     if ctx.done.load(Ordering::Relaxed) {
-        // Triggering the handler again
+        // Work is completed! Trigger the Nginx request handler by posting to the write event.
         unsafe { ngx_post_event((*c).write, &raw mut ngx_posted_events) };
     } else {
-        // Simple thread-safe poll
-        unsafe { ngx_post_event(event, &raw mut ngx_posted_next_events) };
+        // Still waiting for completion. 
+        // We use a small timer (10ms) to poll without hogging the CPU.
+        // Real-time wakeup is currently not possible without ngx_notify (requires Nginx --with-threads)
+        // or a custom self-pipe registered via low-level ngx_add_event (not exposed in current bindings).
+        unsafe { ngx_add_timer(event, 10) };
     }
 }
 
@@ -81,6 +89,8 @@ where
     ctx.event.handler = Some(check_async_work_done::<T>);
     ctx.event.data = request.connection().cast();
     ctx.event.log = unsafe { (*request.connection()).log };
+    
+    // First check is scheduled immediately in the main thread.
     unsafe { ngx_post_event(&raw mut ctx.event, &raw mut ngx_posted_next_events) };
 
     let done_flag = ctx.done.clone();

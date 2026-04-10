@@ -368,6 +368,7 @@ version = "0.1.0"
 dependencies = [
  "dbus",
  "dbus-tokio",
+ "libc",
  "ngx",
  "tokio",
 ]
