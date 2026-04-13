@@ -27,7 +27,7 @@ cd module
 cargo build --release
 
 # Build NGINX with the module (requires helper scripts)
-./module/scripts/build-nginx.sh
+./scripts/build-nginx.sh
 ```
 
 ## Configuration

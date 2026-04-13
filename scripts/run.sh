@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODULE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REPO_DIR="$(cd "$MODULE_DIR/.." && pwd)"
+MODULE_DIR="$(pwd)"
+REPO_DIR="$(pwd)"
 RUNTIME_DIR="$REPO_DIR/.local/manual-run"
 NGINX_PREFIX="$REPO_DIR/.local/nginx"
 NGINX_BIN="$NGINX_PREFIX/sbin/nginx"
@@ -62,7 +62,7 @@ read_pid() {
 
 ensure_prereqs() {
   if [[ ! -x "$NGINX_BIN" ]]; then
-    log "nginx binary not found, running module/scripts/build-nginx.sh"
+    log "nginx binary not found, running scripts/build-nginx.sh"
     "$MODULE_DIR/scripts/build-nginx.sh"
     if [[ ! -x "$NGINX_BIN" ]]; then
       log "nginx build did not produce expected binary: $NGINX_BIN"
