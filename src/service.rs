@@ -1,5 +1,6 @@
 use dbus::nonblock::{Proxy, SyncConnection};
 use dbus_tokio::connection;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tokio::sync::{
@@ -8,7 +9,7 @@ use tokio::sync::{
 };
 use crate::prelude::*;
 
-static CONTROLLER_TX: LazyLock<Sender<ControllerCommand>> = LazyLock::new(|| {
+pub static CONTROLLER_TX: LazyLock<Sender<ControllerCommand>> = LazyLock::new(|| {
     let (resource, conn) = connection::new_system_sync()
         .expect("hibernator: failed to connect to D-Bus system bus");
     let _handle = spawn_future_on_runtime(async move {
@@ -41,18 +42,10 @@ pub(crate) enum ControllerAction {
     Stop,
 }
 
-struct ControllerCommand {
+pub struct ControllerCommand {
     action: ControllerAction,
     service_name: String,
     reply_tx: OneShotSender<bool>,
-}
-
-pub fn init_process() {
-    let _ = controller_tx();
-}
-
-fn controller_tx() -> &'static Sender<ControllerCommand> {
-    &CONTROLLER_TX
 }
 
 pub(crate) async fn request_service_action(action: ControllerAction, service_name: &str) -> bool {
@@ -63,7 +56,7 @@ pub(crate) async fn request_service_action(action: ControllerAction, service_nam
         reply_tx,
     };
 
-    if controller_tx().send(cmd).is_err() {
+    if CONTROLLER_TX.send(cmd).is_err() {
         elog!("hibernator: failed to send command to internal controller");
         return false;
     }
@@ -128,9 +121,32 @@ async fn run_service_action(
 }
 
 pub fn initiate_service_start(service_name: String) {
-    if !try_mark_service_starting(&service_name) {
-        return;
-    }
+    let runtime = runtime_for(&service_name);
+    let target = ServiceHealthState::Starting.as_u8();
+    let success = runtime
+        .state
+        .compare_exchange(
+            ServiceHealthState::Unknown.as_u8(),
+            target,
+            Ordering::AcqRel,
+            Ordering::Relaxed,
+        )
+        .is_ok()
+        || runtime
+            .state
+            .compare_exchange(
+                ServiceHealthState::Down.as_u8(),
+                target,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            )
+            .is_ok();
+
+    if !success { return }
+
+    let now = now_ms();
+    runtime.startup_start_time_ms.store(now, Ordering::Relaxed);
+    runtime.state_change_notify.notify_waiters();
 
     spawn_future_on_runtime(async move {
         let started = request_service_action(ControllerAction::Start, &service_name).await;

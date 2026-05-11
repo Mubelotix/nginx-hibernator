@@ -47,7 +47,9 @@ use state::is_service_up;
 use config::{ModuleConfig, NGX_HTTP_HIBERNATOR_COMMANDS};
 use hibernate::touch_activity;
 use landing::{is_landing_prefixed_uri, serve_landing_page, serve_landing_prefixed_asset};
-use service::{init_process, initiate_service_start};
+use service::initiate_service_start;
+
+use crate::service::CONTROLLER_TX;
 
 pub(crate) struct Module;
 
@@ -95,7 +97,7 @@ pub static mut ngx_http_hibernator_module: ngx_module_t = ngx_module_t {
 };
 
 unsafe extern "C" fn hibernator_init_process(_cycle: *mut ngx_cycle_t) -> ngx_int_t {
-    init_process();
+    let _ = &CONTROLLER_TX;
     start_registered_service_health_monitors();
     Status::NGX_OK.into()
 }

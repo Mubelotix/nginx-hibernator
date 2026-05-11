@@ -36,7 +36,7 @@ pub fn serve_landing_page(
 
     let dir = dir.to_owned();
     let result = perform_async(request, Module::module(), || async move {
-        read_landing_index_async(&dir).await
+        read_landing_asset_by_rel_path_async(&dir, "index.html").await
     });
 
     let Some(result) = result else {
@@ -167,10 +167,6 @@ fn send_page_response(
     } else {
         body_status
     }
-}
-
-async fn read_landing_index_async(landing_dir: &str) -> Option<(Vec<u8>, &'static str)> {
-    read_landing_asset_by_rel_path_async(landing_dir, "index.html").await
 }
 
 async fn read_landing_asset_by_rel_path_async(

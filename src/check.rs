@@ -7,29 +7,25 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::timeout;
 
-static REGISTERED_MONITORS: LazyLock<Mutex<HashMap<String, ServiceMonitorConfig>>> =
+pub static REGISTERED_MONITORS: LazyLock<Mutex<HashMap<String, ServiceMonitorConfig>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Clone)]
-struct ServiceMonitorConfig {
-    service_id: String,
-    mode: ServiceCheckMode,
-    port: u16,
-    endpoint: String,
-    timeout_ms: u64,
-    up_check_interval_ms: u64,
-    starting_check_interval_ms: u64,
-    down_check_interval_ms: u64,
-    history_file: Option<String>,
-    history_samples_count: usize,
-    history_percentile: usize,
+pub struct ServiceMonitorConfig {
+    pub service_id: String,
+    pub mode: ServiceCheckMode,
+    pub port: u16,
+    pub endpoint: String,
+    pub timeout_ms: u64,
+    pub up_check_interval_ms: u64,
+    pub starting_check_interval_ms: u64,
+    pub down_check_interval_ms: u64,
+    pub history_file: Option<String>,
+    pub history_samples_count: usize,
+    pub history_percentile: usize,
 }
 
 static HEALTH_MONITOR_TASK_STARTED: AtomicBool = AtomicBool::new(false);
-
-fn registered_monitors() -> &'static Mutex<HashMap<String, ServiceMonitorConfig>> {
-    &REGISTERED_MONITORS
-}
 
 pub fn ensure_service_health_monitor(
     service_id: &str,
@@ -45,36 +41,6 @@ pub fn ensure_service_health_monitor(
     history_percentile: usize,
 ) {
     let runtime = runtime_for(service_id);
-    apply_health_runtime_config(
-        &runtime,
-        mode,
-        port,
-        endpoint,
-        timeout_ms,
-        up_check_interval_ms,
-        starting_check_interval_ms,
-        down_check_interval_ms,
-        history_file,
-        history_samples_count,
-        history_percentile,
-    );
-    runtime.fetch_eta();
-    start_health_monitor_task_if_needed();
-}
-
-fn apply_health_runtime_config(
-    runtime: &Arc<ServiceRuntime>,
-    mode: ServiceCheckMode,
-    port: u16,
-    endpoint: &str,
-    timeout_ms: u64,
-    up_check_interval_ms: u64,
-    starting_check_interval_ms: u64,
-    down_check_interval_ms: u64,
-    history_file: Option<&str>,
-    history_samples_count: usize,
-    history_percentile: usize,
-) {
     runtime.mode.store(mode_to_u8(mode), Ordering::Relaxed);
     runtime.port.store(port, Ordering::Relaxed);
     runtime
@@ -105,9 +71,8 @@ fn apply_health_runtime_config(
         ep.clear();
         ep.push_str(endpoint);
     }
-}
+    runtime.fetch_eta();
 
-fn start_health_monitor_task_if_needed() {
     // Exit if already started by another thread
     if HEALTH_MONITOR_TASK_STARTED
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
@@ -175,43 +140,9 @@ async fn monitor_service_health(runtime: Arc<ServiceRuntime>) {
     }
 }
 
-pub fn register_service_health_monitor(
-    service_id: &str,
-    mode: ServiceCheckMode,
-    port: u16,
-    endpoint: &str,
-    timeout_ms: u64,
-    up_check_interval_ms: u64,
-    starting_check_interval_ms: u64,
-    down_check_interval_ms: u64,
-    history_file: Option<&str>,
-    history_samples_count: usize,
-    history_percentile: usize,
-) {
-    let mut map = registered_monitors()
-        .lock()
-        .expect("registered monitor lock poisoned");
-    map.insert(
-        service_id.to_owned(),
-        ServiceMonitorConfig {
-            service_id: service_id.to_owned(),
-            mode,
-            port,
-            endpoint: endpoint.to_owned(),
-            timeout_ms,
-            up_check_interval_ms,
-            starting_check_interval_ms,
-            down_check_interval_ms,
-            history_file: history_file.map(|s| s.to_owned()),
-            history_samples_count,
-            history_percentile,
-        },
-    );
-}
-
 pub fn start_registered_service_health_monitors() {
     let configs: Vec<ServiceMonitorConfig> = {
-        let map = registered_monitors()
+        let map = REGISTERED_MONITORS
             .lock()
             .expect("registered monitor lock poisoned");
         map.values().cloned().collect()
@@ -232,38 +163,6 @@ pub fn start_registered_service_health_monitors() {
             cfg.history_percentile,
         );
     }
-}
-
-
-pub fn try_mark_service_starting(service_id: &str) -> bool {
-    let runtime = runtime_for(service_id);
-    let target = ServiceHealthState::Starting.as_u8();
-    let success = runtime
-        .state
-        .compare_exchange(
-            ServiceHealthState::Unknown.as_u8(),
-            target,
-            Ordering::AcqRel,
-            Ordering::Relaxed,
-        )
-        .is_ok()
-        || runtime
-            .state
-            .compare_exchange(
-                ServiceHealthState::Down.as_u8(),
-                target,
-                Ordering::AcqRel,
-                Ordering::Relaxed,
-            )
-            .is_ok();
-
-    if success {
-        let now = now_ms();
-        runtime.startup_start_time_ms.store(now, Ordering::Relaxed);
-        runtime.state_change_notify.notify_waiters();
-    }
-
-    success
 }
 
 async fn refresh_service_health_async(runtime: &ServiceRuntime) -> bool {

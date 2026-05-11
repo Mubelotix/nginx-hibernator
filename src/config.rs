@@ -5,7 +5,7 @@ use ngx::ffi::{
 };
 use ngx::http::{self, MergeConfigError};
 use ngx::{ngx_conf_log_error, ngx_string};
-use crate::prelude::*;
+use crate::check::{REGISTERED_MONITORS, ServiceMonitorConfig};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ServiceCheckMode {
@@ -118,27 +118,31 @@ impl http::Merge for ModuleConfig {
         }
 
         if self.enable {
+            let mut map = REGISTERED_MONITORS.lock().expect("registered monitor lock poisoned");
             if let Some(target_port) = self.target_port {
                 let health_service_id = self
                     .service_name
                     .clone()
                     .unwrap_or_else(|| format!("{}:{}", target_port, self.check_endpoint));
-                register_service_health_monitor(
-                    &health_service_id,
-                    self.check_mode,
-                    target_port,
-                    &self.check_endpoint,
-                    self.check_timeout_ms,
-                    self.up_check_interval_ms,
-                    self.starting_check_interval_ms,
-                    self.down_check_interval_ms,
-                    if self.eta_enabled.unwrap_or(true) {
-                        self.history_file.as_deref()
-                    } else {
-                        None
-                    },
-                    self.history_samples_count,
-                    self.history_percentile,
+                map.insert(
+                    health_service_id.clone(),
+                        ServiceMonitorConfig {
+                        service_id: health_service_id,
+                        mode: self.check_mode,
+                        port: target_port,
+                        endpoint: self.check_endpoint.clone(),
+                        timeout_ms: self.check_timeout_ms,
+                        up_check_interval_ms: self.up_check_interval_ms,
+                        starting_check_interval_ms: self.starting_check_interval_ms,
+                        down_check_interval_ms: self.down_check_interval_ms,
+                        history_file: if self.eta_enabled.unwrap_or(true) {
+                            self.history_file.to_owned()
+                        } else {
+                            None
+                        },
+                        history_samples_count: self.history_samples_count,
+                        history_percentile: self.history_percentile,
+                    }
                 );
             }
         }

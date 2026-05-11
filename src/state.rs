@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Notify;
 use crate::prelude::*;
 
@@ -152,16 +151,4 @@ pub fn get_service_state(service_id: &str) -> ServiceHealthState {
 pub fn set_service_state(service_id: &str, state: ServiceHealthState) {
     let runtime = runtime_for(service_id);
     runtime.set_state(state);
-}
-
-pub fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0_u64, |d| d.as_secs())
-}
-
-pub fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0_u64, |d| d.as_millis() as u64)
 }
