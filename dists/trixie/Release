@@ -1,0 +1,8 @@
+Origin: nginx-hibernator
+Label: nginx-hibernator
+Suite: trixie
+Codename: trixie
+Version: 13.0
+Architectures: amd64
+Components: main
+Description: nginx-hibernator module packages
