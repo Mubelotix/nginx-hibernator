@@ -1,7 +1,7 @@
 use crate::prelude::*;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -24,8 +24,6 @@ pub struct ServiceMonitorConfig {
     pub history_samples_count: usize,
     pub history_percentile: usize,
 }
-
-static HEALTH_MONITOR_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 
 pub fn ensure_service_health_monitor(
     service_id: &str,
@@ -73,22 +71,15 @@ pub fn ensure_service_health_monitor(
     }
     runtime.fetch_eta();
 
-    // Exit if already started by another thread
-    if HEALTH_MONITOR_TASK_STARTED
+    if runtime
+        .health_monitor_started
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
         .is_err()
     {
         return;
     }
 
-    let runtimes: Vec<Arc<ServiceRuntime>> = {
-        let map = SERVICE_RUNTIMES.lock().expect("service runtime lock poisoned");
-        map.values().cloned().collect()
-    };
-
-    for runtime in runtimes {
-        spawn_future_on_runtime(monitor_service_health(runtime));
-    }
+    spawn_future_on_runtime(monitor_service_health(runtime));
 }
 
 async fn monitor_service_health(runtime: Arc<ServiceRuntime>) {

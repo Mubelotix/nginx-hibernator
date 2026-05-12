@@ -5,7 +5,6 @@ use ngx::ffi::{ngx_conf_t, ngx_int_t, ngx_shm_zone_t, ngx_shared_memory_add};
 use ngx::{allocator::allocate, ngx_string};
 use std::sync::atomic::{AtomicU8, AtomicPtr, Ordering};
 use ngx::sync::RwLock;
-use crate::prelude::*;
 
 #[repr(C)]
 pub struct SharedState {
@@ -61,7 +60,7 @@ pub fn ensure_shared_state_zone(cf: *mut ngx_conf_t) -> bool {
             cf,
             &raw mut name,
             128 * 1024,
-            (&raw mut crate::ngx_http_hibernator_module).cast(),
+            &raw const SHARED_STATE_ZONE as *const _ as *mut core::ffi::c_void,
         )
     };
 

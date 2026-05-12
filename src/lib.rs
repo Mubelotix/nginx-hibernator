@@ -49,6 +49,7 @@ use hibernate::touch_activity;
 use landing::{is_landing_prefixed_uri, serve_landing_page, serve_landing_prefixed_asset};
 use service::initiate_service_start;
 
+use crate::check::REGISTERED_MONITORS;
 use crate::service::CONTROLLER_TX;
 
 pub(crate) struct Module;
@@ -56,6 +57,12 @@ pub(crate) struct Module;
 impl http::HttpModule for Module {
     fn module() -> &'static ngx_module_t {
         unsafe { &*::core::ptr::addr_of!(ngx_http_hibernator_module) }
+    }
+
+    unsafe extern "C" fn preconfiguration(_cf: *mut ngx_conf_t) -> ngx_int_t {
+        let mut map = REGISTERED_MONITORS.lock().expect("registered monitor lock poisoned");
+        map.clear();
+        Status::NGX_OK.into()
     }
 
     unsafe extern "C" fn postconfiguration(cf: *mut ngx_conf_t) -> ngx_int_t {

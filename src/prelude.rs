@@ -10,7 +10,7 @@ pub(crate) use crate::history::SERVICE_HISTORY;
 pub(crate) use crate::runtime::spawn_future_on_runtime;
 pub(crate) use crate::service::{request_service_action, ControllerAction};
 pub(crate) use crate::state::{
-    runtime_for, SERVICE_RUNTIMES, ServiceHealthState, ServiceRuntime,
+    runtime_for, ServiceHealthState, ServiceRuntime,
 };
 pub(crate) use ngx::http::{self, Request};
 

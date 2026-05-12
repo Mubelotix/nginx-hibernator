@@ -36,6 +36,7 @@ pub struct ServiceRuntime {
     pub service_id: String,
     pub last_activity_secs: AtomicU64,
     pub keep_alive_secs: AtomicU64,
+    pub health_monitor_started: AtomicBool,
 
     pub mode: AtomicU8,
     pub port: AtomicU16,
@@ -80,6 +81,7 @@ impl ServiceRuntime {
             history_file: Mutex::new(None),
             history_samples_count: std::sync::atomic::AtomicUsize::new(40),
             history_percentile: std::sync::atomic::AtomicUsize::new(95),
+            health_monitor_started: AtomicBool::new(false),
         }
     }
 
