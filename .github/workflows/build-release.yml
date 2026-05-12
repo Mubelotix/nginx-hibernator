@@ -1,0 +1,194 @@
+name: Build and Release Debian Package
+
+on:
+  schedule:
+    # Check daily for new nginx releases
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      force_release:
+        description: 'Force release even if version exists'
+        required: false
+        type: boolean
+
+jobs:
+  check-and-build:
+    runs-on: ubuntu-latest
+    outputs:
+      needs_release: ${{ steps.check.outputs.needs_release }}
+      nginx_version: ${{ steps.check.outputs.nginx_version }}
+      pkg_version: ${{ steps.check.outputs.pkg_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for new nginx version
+        id: check
+        run: |
+          # Get current nginx version from Debian trixie
+          NGINX_VERSION=$(apt-cache policy nginx 2>/dev/null | grep Candidate | awk '{print $2}' || curl -s https://packages.debian.org/trixie/nginx | grep -oP 'nginx/\K[0-9.]+' | head -1)
+          
+          if [ -z "$NGINX_VERSION" ]; then
+            NGINX_VERSION=$(curl -s https://packages.debian.org/trixie/nginx | grep -oP 'nginx/\K[0-9.]+' | head -1)
+          fi
+          
+          echo "nginx_version=$NGINX_VERSION" >> $GITHUB_OUTPUT
+          
+          # Check if this version is already in git tags
+          if git rev-parse "v$NGINX_VERSION" >/dev/null 2>&1 && [ "${{ github.event.inputs.force_release }}" != "true" ]; then
+            echo "needs_release=false" >> $GITHUB_OUTPUT
+            echo "Version $NGINX_VERSION already released"
+          else
+            echo "needs_release=true" >> $GITHUB_OUTPUT
+            echo "Building for nginx $NGINX_VERSION"
+          fi
+          
+          # Package version includes the nginx version
+          PKG_VERSION="${NGINX_VERSION}-$(date +%s)"
+          echo "pkg_version=$PKG_VERSION" >> $GITHUB_OUTPUT
+
+  build:
+    needs: check-and-build
+    if: needs.check-and-build.outputs.needs_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Debian package
+        run: |
+          ./scripts/debian-build.sh
+          ls -lh target/docker/
+
+      - name: Test package
+        run: |
+          timeout 120 ./test-debian.sh 2>&1 | tee test-output.log
+          if grep -q "all tests passed" test-output.log; then
+            echo "Tests passed!"
+            exit 0
+          else
+            echo "Tests failed!"
+            tail -100 test-output.log
+            exit 1
+          fi
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs
+          path: test-output.log
+
+      - name: Find built package
+        id: pkg
+        run: |
+          PKG=$(find target/docker -maxdepth 1 -name '*.deb' -type f)
+          echo "package=$PKG" >> $GITHUB_OUTPUT
+          echo "filename=$(basename $PKG)" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ needs.check-and-build.outputs.nginx_version }}
+          name: nginx-hibernator ${{ needs.check-and-build.outputs.nginx_version }}
+          body: |
+            Built against nginx ${{ needs.check-and-build.outputs.nginx_version }} from Debian trixie
+            
+            ## Installation
+            
+            Add the APT repository:
+            ```bash
+            echo "deb [trusted=yes] https://github.com/${{ github.repository }}/releases/download/repo/ trixie main" | sudo tee /etc/apt/sources.list.d/nginx-hibernator.list
+            sudo apt-get update
+            sudo apt-get install nginx-hibernator-module
+            ```
+            
+            Or install directly:
+            ```bash
+            sudo apt-get install ${{ steps.pkg.outputs.filename }}
+            ```
+          files: ${{ steps.pkg.outputs.package }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload to releases for APT repo
+        run: |
+          mkdir -p apt-repo/pool/main/n/nginx-hibernator
+          cp ${{ steps.pkg.outputs.package }} apt-repo/pool/main/n/nginx-hibernator/
+
+      - name: Generate APT repository metadata
+        run: |
+          cd apt-repo
+          
+          # Create Packages file
+          mkdir -p dists/trixie/main/binary-amd64
+          dpkg-scanpackages --multiversion pool/main/ > dists/trixie/main/binary-amd64/Packages
+          gzip -k dists/trixie/main/binary-amd64/Packages
+          
+          # Create Release file
+          cat > dists/trixie/Release <<EOF
+          Origin: nginx-hibernator
+          Label: nginx-hibernator
+          Suite: trixie
+          Codename: trixie
+          Version: 13.0
+          Architectures: amd64
+          Components: main
+          Description: nginx-hibernator module packages
+          EOF
+          
+          cd ..
+
+      - name: Import APT signing key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+        run: |
+          test -n "$GPG_PRIVATE_KEY"
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          mkdir -p "$GNUPGHOME"
+          chmod 700 "$GNUPGHOME"
+          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --import
+          KEY_FPR="$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^fpr:/ { print $10; exit }')"
+          test -n "$KEY_FPR"
+          echo "key_fpr=$KEY_FPR" >> "$GITHUB_OUTPUT"
+
+      - name: Sign APT repository metadata
+        run: |
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          cd apt-repo
+          KEY_FPR="$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^fpr:/ { print $10; exit }')"
+          test -n "$KEY_FPR"
+          gpg --batch --yes --local-user "$KEY_FPR" --clearsign -o dists/trixie/InRelease dists/trixie/Release
+          gpg --batch --yes --local-user "$KEY_FPR" --detach-sign -o dists/trixie/Release.gpg dists/trixie/Release
+          gpg --armor --export > dists/trixie/repo-public.key
+
+      - name: Deploy APT repository to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./apt-repo
+          cname: false
+          allow_empty_commit: true
+          keep_files: true
+
+  notify:
+    needs: [check-and-build, build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check build status
+        run: |
+          if [ "${{ needs.build.result }}" == "success" ]; then
+            echo "✅ Package successfully built and tested for nginx ${{ needs.check-and-build.outputs.nginx_version }}"
+          elif [ "${{ needs.build.result }}" == "skipped" ]; then
+            echo "⏭️  No new nginx version to build"
+          else
+            echo "❌ Build or tests failed"
+            exit 1
+          fi

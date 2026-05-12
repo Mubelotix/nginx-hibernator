@@ -148,6 +148,31 @@ This builds a Debian trixie image, downloads the nginx source package inside the
 target/docker/nginx-hibernator-module_<version>-<release>_<arch>.deb
 ```
 
+### APT Repository
+
+Prebuilt packages are available on GitHub Pages. To install from the APT repository:
+
+```bash
+# Install the repository public key
+curl -fsSL https://mubelotix.github.io/nginx-hibernator/dists/trixie/repo-public.key | sudo gpg --dearmor -o /usr/share/keyrings/nginx-hibernator.gpg
+
+# Add the repository
+echo "deb [signed-by=/usr/share/keyrings/nginx-hibernator.gpg] https://mubelotix.github.io/nginx-hibernator trixie main" | sudo tee /etc/apt/sources.list.d/nginx-hibernator.list
+
+# Update package lists
+sudo apt-get update
+
+# Install the module
+sudo apt-get install nginx-hibernator-module
+
+# Reload nginx
+sudo systemctl reload nginx
+```
+
+The module is automatically loaded by nginx through `/etc/nginx/modules-enabled/`.
+
+The APT repository is signed, and the public key is published at `https://mubelotix.github.io/nginx-hibernator/dists/trixie/repo-public.key`.
+
 ## Alternatives
 
 - [GoDoxy](https://github.com/yusing/go-proxy): A Go-based proxy with similar features but requires replacing NGINX and only supports Docker.
