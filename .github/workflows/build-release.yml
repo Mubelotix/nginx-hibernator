@@ -104,9 +104,9 @@ jobs:
             
             ## Installation
             
-            Add the APT repository:
+            Add the APT repository from GitHub Pages:
             ```bash
-            echo "deb [trusted=yes] https://github.com/${{ github.repository }}/releases/download/repo/ trixie main" | sudo tee /etc/apt/sources.list.d/nginx-hibernator.list
+            echo "deb [trusted=yes] https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/ trixie main" | sudo tee /etc/apt/sources.list.d/nginx-hibernator.list
             sudo apt-get update
             sudo apt-get install nginx-hibernator-module
             ```
