@@ -7,7 +7,7 @@ use crate::prelude::*;
 pub fn touch_activity(service_name: &str, keep_alive_secs: u64) {
     let rt = runtime_for(service_name);
     rt.keep_alive_secs.store(keep_alive_secs, Ordering::Relaxed);
-    rt.last_activity_secs.store(now_secs(), Ordering::Relaxed);
+    rt.shared.store_last_activity_secs(now_secs());
 }
 
 pub(crate) fn spawn_idle_monitor(service_name: String, runtime: Arc<ServiceRuntime>) {
@@ -22,7 +22,7 @@ pub(crate) fn spawn_idle_monitor(service_name: String, runtime: Arc<ServiceRunti
             }
 
             let now = now_secs();
-            let last = runtime.last_activity_secs.load(Ordering::Relaxed);
+            let last = runtime.shared.load_last_activity_secs();
             let idle = now.saturating_sub(last);
 
             if idle >= keep_alive && runtime.state() == ServiceHealthState::Up {

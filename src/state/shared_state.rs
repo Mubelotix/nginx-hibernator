@@ -3,21 +3,31 @@ use ngx::collections::RbTreeMap;
 use ngx::core::{NgxString, SlabPool, Status};
 use ngx::ffi::{ngx_conf_t, ngx_int_t, ngx_shm_zone_t, ngx_shared_memory_add};
 use ngx::{allocator::allocate, ngx_string};
-use std::sync::atomic::{AtomicU8, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, AtomicPtr, Ordering};
 use ngx::sync::RwLock;
 
-#[repr(C)]
-pub struct SharedState {
-    pub state: AtomicU8,
-}
-
-impl SharedState {
-    pub fn new() -> Self {
-        Self {
-            state: AtomicU8::new(super::ServiceHealthState::Unknown.as_u8()),
-        }
-    }
-}
+use crate::prelude::now_secs;
+ 
+ #[repr(C)]
+ pub struct SharedState {
+     pub state: AtomicU8,
+     pub expected_startup_duration_ms: AtomicU64,
+     pub last_check_ms: AtomicU64,
+     pub last_activity_secs: AtomicU64,
+     pub startup_start_time_ms: AtomicU64,
+ }
+ 
+ impl SharedState {
+     pub fn new() -> Self {
+         Self {
+             state: AtomicU8::new(super::ServiceHealthState::Unknown.as_u8()),
+             expected_startup_duration_ms: AtomicU64::new(0),
+             last_check_ms: AtomicU64::new(0),
+             last_activity_secs: AtomicU64::new(now_secs()),
+             startup_start_time_ms: AtomicU64::new(0),
+         }
+     }
+ }
 
 pub type SharedStateMap = RwLock<RbTreeMap<NgxString<SlabPool>, SharedState, SlabPool>>;
 
@@ -36,6 +46,7 @@ impl SharedStateRef {
         unsafe { self.0.as_ref().state.store(value, Ordering::Release) }
     }
 
+
     pub fn swap_state(self, value: u8) -> u8 {
         unsafe { self.0.as_ref().state.swap(value, Ordering::AcqRel) }
     }
@@ -48,6 +59,44 @@ impl SharedStateRef {
                 .compare_exchange(current, new, Ordering::AcqRel, Ordering::Relaxed)
                 .is_ok()
         }
+    }
+
+    pub fn load_expected_startup_duration_ms(self) -> u64 {
+        unsafe { self.0.as_ref().expected_startup_duration_ms.load(Ordering::Acquire) }
+    }
+
+    pub fn store_expected_startup_duration_ms(self, value: u64) {
+        unsafe { self.0.as_ref().expected_startup_duration_ms.store(value, Ordering::Release) }
+    }
+
+    pub fn load_last_check_ms(self) -> u64 {
+        unsafe { self.0.as_ref().last_check_ms.load(Ordering::Acquire) }
+    }
+
+    pub fn compare_exchange_last_check_ms(self, current: u64, new: u64) -> bool {
+        unsafe {
+            self.0
+                .as_ref()
+                .last_check_ms
+                .compare_exchange(current, new, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+        }
+    }
+
+    pub fn load_last_activity_secs(self) -> u64 {
+        unsafe { self.0.as_ref().last_activity_secs.load(Ordering::Acquire) }
+    }
+
+    pub fn store_last_activity_secs(self, value: u64) {
+        unsafe { self.0.as_ref().last_activity_secs.store(value, Ordering::Release) }
+    }
+
+    pub fn load_startup_start_time_ms(self) -> u64 {
+        unsafe { self.0.as_ref().startup_start_time_ms.load(Ordering::Acquire) }
+    }
+
+    pub fn store_startup_start_time_ms(self, value: u64) {
+        unsafe { self.0.as_ref().startup_start_time_ms.store(value, Ordering::Release) }
     }
 }
 

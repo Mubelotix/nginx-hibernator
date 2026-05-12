@@ -6,6 +6,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::timeout;
+use tokio::net::TcpStream;
 
 pub static REGISTERED_MONITORS: LazyLock<Mutex<HashMap<String, ServiceMonitorConfig>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -93,6 +94,7 @@ async fn monitor_service_health(runtime: Arc<ServiceRuntime>) {
             ServiceHealthState::Unknown => 0,
         };
 
+
         let notified = timeout(
             Duration::from_millis(interval_ms),
             runtime.state_change_notify.notified(),
@@ -104,33 +106,43 @@ async fn monitor_service_health(runtime: Arc<ServiceRuntime>) {
             continue;
         }
 
+        let now = now_ms();
+        let last = runtime.shared.load_last_check_ms();
+        if now < last + interval_ms - 10 {
+            continue;
+        }
+        if !runtime.shared.compare_exchange_last_check_ms(last, now) {
+            continue;
+        }
+
         let is_up = refresh_service_health_async(&runtime).await;
         let next_state = if is_up {
-            if runtime.state() == ServiceHealthState::Starting {
-                let start = runtime.startup_start_time_ms.load(Ordering::Relaxed);
-                let now_ms = now_ms();
-                let now_secs = now_ms / 1000;
-                if start > 0 {
-                    let duration = now_ms.saturating_sub(start);
-                    if let Some(history_file) = runtime.history_file() {
-                        let rt = Arc::clone(&runtime);
-                        spawn_future_on_runtime(async move {
-                            SERVICE_HISTORY
-                                .put_history(&history_file, duration as usize)
-                                .await;
-                            rt.fetch_eta();
-                        });
-                    }
-                }
-                runtime.last_activity_secs.store(now_secs, Ordering::Relaxed);
-            }
             ServiceHealthState::Up
         } else if runtime.state() == ServiceHealthState::Starting {
             ServiceHealthState::Starting
         } else {
             ServiceHealthState::Down
         };
-        runtime.set_state_without_notify(next_state);
+
+        let previous_state = ServiceHealthState::from_u8(runtime.shared.swap_state(next_state.as_u8()));
+        if previous_state == ServiceHealthState::Starting && next_state == ServiceHealthState::Up {
+            let start = runtime.shared.load_startup_start_time_ms();
+            let now_ms = now_ms();
+            let now_secs = now_ms / 1000;
+            if start > 0 {
+                let duration = now_ms.saturating_sub(start);
+                if let Some(history_file) = runtime.history_file() {
+                    let rt = Arc::clone(&runtime);
+                    spawn_future_on_runtime(async move {
+                        SERVICE_HISTORY
+                            .put_history(&history_file, duration as usize)
+                            .await;
+                        rt.fetch_eta();
+                    });
+                }
+            }
+            runtime.shared.store_last_activity_secs(now_secs);
+        }
     }
 }
 
@@ -202,7 +214,7 @@ async fn is_service_up_port_async(port: u16, timeout_ms: u64) -> bool {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     timeout(
         Duration::from_millis(timeout_ms.max(1)),
-        tokio::net::TcpStream::connect(addr),
+        TcpStream::connect(addr),
     )
     .await
     .is_ok_and(|res| res.is_ok())
@@ -212,7 +224,7 @@ async fn is_service_up_http_async(port: u16, endpoint: &str, timeout_ms: u64) ->
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let timeout_dur = Duration::from_millis(timeout_ms.max(1));
 
-    let Ok(connect_result) = timeout(timeout_dur, tokio::net::TcpStream::connect(addr)).await
+    let Ok(connect_result) = timeout(timeout_dur, TcpStream::connect(addr)).await
     else {
         return false;
     };

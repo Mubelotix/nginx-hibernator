@@ -1,6 +1,5 @@
 use dbus::nonblock::{Proxy, SyncConnection};
 use dbus_tokio::connection;
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tokio::sync::{
@@ -127,7 +126,7 @@ pub fn initiate_service_start(service_name: String) {
     }
 
     let now = now_ms();
-    runtime.startup_start_time_ms.store(now, Ordering::Relaxed);
+    runtime.shared.store_startup_start_time_ms(now);
     runtime.state_change_notify.notify_waiters();
 
     spawn_future_on_runtime(async move {

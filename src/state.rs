@@ -34,7 +34,6 @@ impl ServiceHealthState {
 
 pub struct ServiceRuntime {
     pub service_id: String,
-    pub last_activity_secs: AtomicU64,
     pub keep_alive_secs: AtomicU64,
     pub health_monitor_started: AtomicBool,
 
@@ -45,12 +44,8 @@ pub struct ServiceRuntime {
     pub starting_check_interval_ms: AtomicU64,
     pub down_check_interval_ms: AtomicU64,
     pub endpoint: Mutex<String>,
-    pub state: AtomicU8,
-    shared_state: Option<SharedStateRef>,
+    pub shared: SharedStateRef,
     pub state_change_notify: Notify,
-    
-    pub startup_start_time_ms: AtomicU64,
-    pub expected_startup_duration_ms: AtomicU64,
 
     pub eta_enabled: AtomicBool,
     pub history_file: Mutex<Option<String>>,
@@ -59,10 +54,9 @@ pub struct ServiceRuntime {
 }
 
 impl ServiceRuntime {
-    pub fn new(service_id: String, shared_state: Option<SharedStateRef>) -> Self {
+    pub fn new(service_id: String, shared_state: SharedStateRef) -> Self {
         Self {
             service_id,
-            last_activity_secs: AtomicU64::new(now_secs()),
             keep_alive_secs: AtomicU64::new(300),
 
             mode: AtomicU8::new(0),
@@ -72,11 +66,8 @@ impl ServiceRuntime {
             starting_check_interval_ms: AtomicU64::new(100),
             down_check_interval_ms: AtomicU64::new(60_000),
             endpoint: Mutex::new("/ready".to_owned()),
-            state: AtomicU8::new(ServiceHealthState::Unknown.as_u8()),
-            shared_state,
+            shared: shared_state,
             state_change_notify: Notify::new(),
-            startup_start_time_ms: AtomicU64::new(0),
-            expected_startup_duration_ms: AtomicU64::new(0),
             eta_enabled: AtomicBool::new(true),
             history_file: Mutex::new(None),
             history_samples_count: std::sync::atomic::AtomicUsize::new(40),
@@ -86,31 +77,18 @@ impl ServiceRuntime {
     }
 
     pub fn state(&self) -> ServiceHealthState {
-        let raw = if let Some(shared) = self.shared_state {
-            shared.load_state()
-        } else {
-            self.state.load(Ordering::Acquire)
-        };
-        ServiceHealthState::from_u8(raw)
+        ServiceHealthState::from_u8(self.shared.load_state())
     }
-
     pub fn set_state_without_notify(&self, state: ServiceHealthState) {
-        if let Some(shared) = self.shared_state {
-            shared.store_state(state.as_u8());
-        }
-        self.state.store(state.as_u8(), Ordering::Release);
+        self.shared.store_state(state.as_u8());
     }
 
-    pub fn set_state(&self, state: ServiceHealthState) {
-        let previous = if let Some(shared) = self.shared_state {
-            shared.swap_state(state.as_u8())
-        } else {
-            self.state.swap(state.as_u8(), Ordering::AcqRel)
-        };
-        self.state.store(state.as_u8(), Ordering::Release);
+    pub fn set_state(&self, state: ServiceHealthState) -> ServiceHealthState {
+        let previous = self.shared.swap_state(state.as_u8());
         if previous != state.as_u8() {
             self.state_change_notify.notify_waiters();
         }
+        ServiceHealthState::from_u8(previous)
     }
 
     pub fn try_mark_starting(&self) -> bool {
@@ -118,25 +96,9 @@ impl ServiceRuntime {
         let unknown = ServiceHealthState::Unknown.as_u8();
         let down = ServiceHealthState::Down.as_u8();
 
-        let changed = if let Some(shared) = self.shared_state {
-            shared.compare_exchange_state(unknown, target)
-                || shared.compare_exchange_state(down, target)
-        } else {
-            self.state
-                .compare_exchange(unknown, target, Ordering::AcqRel, Ordering::Relaxed)
-                .is_ok()
-                || self
-                    .state
-                    .compare_exchange(down, target, Ordering::AcqRel, Ordering::Relaxed)
-                    .is_ok()
-        };
-
-        if changed {
-            self.state.store(target, Ordering::Release);
-        }
-        changed
+        self.shared.compare_exchange_state(unknown, target)
+            || self.shared.compare_exchange_state(down, target)
     }
-
 
     pub fn history_file(&self) -> Option<String> {
         if !self.eta_enabled.load(Ordering::Relaxed) {
@@ -156,7 +118,7 @@ impl ServiceRuntime {
             let rt = Arc::clone(self);
             spawn_future_on_runtime(async move {
                 if let Some(eta) = SERVICE_HISTORY.get_eta(&history_file, pctl, count).await {
-                    rt.expected_startup_duration_ms.store(eta as u64, Ordering::Relaxed);
+                    rt.shared.store_expected_startup_duration_ms(eta as u64);
                 }
             });
         }
@@ -175,7 +137,8 @@ pub fn runtime_for(service_id: &str) -> Arc<ServiceRuntime> {
         return Arc::clone(existing);
     }
 
-    let runtime = Arc::new(ServiceRuntime::new(service_id.to_owned(), shared_state_for(service_id)));
+    let shared = shared_state_for(service_id).expect("shared state zone is mandatory for hibernator");
+    let runtime = Arc::new(ServiceRuntime::new(service_id.to_owned(), shared));
     spawn_idle_monitor(service_id.to_owned(), Arc::clone(&runtime));
     map.insert(service_id.to_owned(), Arc::clone(&runtime));
     runtime
@@ -192,7 +155,3 @@ pub fn get_service_state(service_id: &str) -> ServiceHealthState {
         .unwrap_or(ServiceHealthState::Unknown)
 }
 
-pub fn set_service_state(service_id: &str, state: ServiceHealthState) {
-    let runtime = runtime_for(service_id);
-    runtime.set_state(state);
-}

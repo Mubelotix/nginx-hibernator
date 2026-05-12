@@ -6,8 +6,8 @@ use ngx::ffi::{ngx_chain_t, ngx_http_request_t, ngx_int_t};
 use crate::prelude::*;
 use crate::Module;
 use crate::nginx_async::perform_async;
-use core::sync::atomic::Ordering;
-use tokio::fs as async_fs;
+use tokio::fs::read;
+use ngx::http::HTTPStatus;
 
 unsafe extern "C" {
     fn ngx_http_finalize_request(r: *mut ngx_http_request_t, rc: ngx_int_t);
@@ -23,8 +23,8 @@ pub fn serve_landing_page(
     keep_alive_secs: u64,
 ) -> Status {
     let runtime = runtime_for(service_id);
-    let start = runtime.startup_start_time_ms.load(Ordering::Relaxed);
-    let expected = runtime.expected_startup_duration_ms.load(Ordering::Relaxed);
+    let start = runtime.shared.load_startup_start_time_ms();
+    let expected = runtime.shared.load_expected_startup_duration_ms();
     let now = now_ms();
 
     let elapsed = if start > 0 { now.saturating_sub(start) } else { 0 };
@@ -43,7 +43,7 @@ pub fn serve_landing_page(
     });
 
     let body = apply_eta(body, content_type, elapsed, expected, keep_alive_secs);
-    send_page_response(request, &body, content_type, http::HTTPStatus::SERVICE_UNAVAILABLE)
+    send_page_response(request, &body, content_type, HTTPStatus::SERVICE_UNAVAILABLE)
 }
 
 fn apply_eta(
@@ -72,11 +72,11 @@ fn apply_eta(
 
 pub fn serve_landing_prefixed_asset(request: &mut Request, landing_dir: &str) -> Status {
     let Ok(uri) = request.path().to_str() else {
-        return http::HTTPStatus::NOT_FOUND.into();
+        return HTTPStatus::NOT_FOUND.into();
     };
 
     let Some(rel_path) = landing_rel_path_from_uri(uri) else {
-        return http::HTTPStatus::NOT_FOUND.into();
+        return HTTPStatus::NOT_FOUND.into();
     };
 
     let dir = landing_dir.to_owned();
@@ -90,9 +90,9 @@ pub fn serve_landing_prefixed_asset(request: &mut Request, landing_dir: &str) ->
     };
 
     if let Some((body, content_type)) = result {
-        send_page_response(request, &body, content_type, http::HTTPStatus::OK)
+        send_page_response(request, &body, content_type, HTTPStatus::OK)
     } else {
-        http::HTTPStatus::NOT_FOUND.into()
+        HTTPStatus::NOT_FOUND.into()
     }
 }
 
@@ -104,7 +104,7 @@ fn send_page_response(
     request: &mut Request,
     body: &[u8],
     content_type: &str,
-    status: http::HTTPStatus,
+    status: HTTPStatus,
 ) -> Status {
     let rc = request.discard_request_body();
     if rc != Status::NGX_OK {
@@ -165,7 +165,7 @@ async fn read_landing_asset_by_rel_path_async(
     rel_path: &str,
 ) -> Option<(Vec<u8>, &'static str)> {
     let path = resolve_landing_path(landing_dir, rel_path)?;
-    let bytes = async_fs::read(&path).await.ok()?;
+    let bytes = read(&path).await.ok()?;
     let content_type = content_type_for_path(&path);
     Some((bytes, content_type))
 }

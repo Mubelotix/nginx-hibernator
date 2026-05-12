@@ -12,7 +12,7 @@ pub(crate) use crate::service::{request_service_action, ControllerAction};
 pub(crate) use crate::state::{
     runtime_for, ServiceHealthState, ServiceRuntime,
 };
-pub(crate) use ngx::http::{self, Request};
+pub(crate) use ngx::http::Request;
 
 pub fn now_secs() -> u64 {
     SystemTime::now()

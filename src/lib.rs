@@ -7,6 +7,7 @@ use ngx::ffi::{
 };
 use ngx::http::{self, HttpModule, HttpModuleLocationConf, Request};
 use ngx::{ngx_conf_log_error, ngx_log_debug_http};
+use core::ptr::addr_of;
 
 #[macro_export]
 macro_rules! log {
@@ -56,7 +57,7 @@ pub(crate) struct Module;
 
 impl http::HttpModule for Module {
     fn module() -> &'static ngx_module_t {
-        unsafe { &*::core::ptr::addr_of!(ngx_http_hibernator_module) }
+        unsafe { &*addr_of!(ngx_http_hibernator_module) }
     }
 
     unsafe extern "C" fn preconfiguration(_cf: *mut ngx_conf_t) -> ngx_int_t {
@@ -210,7 +211,7 @@ unsafe fn register_access_handler(cf: *mut ngx_conf_t) -> Result<(), ()> {
     }
 
     let conf_ctx = unsafe { &mut *conf_ctx };
-    let core_module = unsafe { &*::core::ptr::addr_of!(ngx_http_core_module) };
+    let core_module = unsafe { &*addr_of!(ngx_http_core_module) };
     let cmcf_ptr = unsafe { *conf_ctx.main_conf.add(core_module.ctx_index) }
         .cast::<ngx_http_core_main_conf_t>();
     if cmcf_ptr.is_null() {

@@ -10,10 +10,11 @@ pub struct ServiceHistory(Arc<RwLock<HashMap<String, Vec<usize>>>>);
 async fn read_file(file: &str) -> Vec<usize> {
     match read_to_string(file).await {
         Ok(content) => content.lines().filter_map(|line| line.parse().ok()).collect(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(e) => {
             elog!("Failed to read file {file}: {e}");
             Vec::new()
-        },
+        }
     }
 }
 
