@@ -64,6 +64,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Read hibernator version
+        id: hibernator_version
+        run: |
+          VERSION="$(awk -F'"' '/^version\s*=\s*"/ {print $2; exit}' Cargo.toml)"
+          test -n "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 
@@ -106,7 +113,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: v${{ needs.check-and-build.outputs.nginx_version }}
-          name: nginx-hibernator ${{ needs.check-and-build.outputs.nginx_version }}
+          name: ${{ github.event.repository.name }} ${{ steps.hibernator_version.outputs.version }} for nginx v${{ needs.check-and-build.outputs.nginx_version }}
           body: |
             Built against nginx ${{ needs.check-and-build.outputs.nginx_version }} from Debian trixie
             
