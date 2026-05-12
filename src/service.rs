@@ -142,7 +142,9 @@ pub fn initiate_service_start(service_name: String) {
             )
             .is_ok();
 
-    if !success { return }
+    if !success {
+        return;
+    }
 
     let now = now_ms();
     runtime.startup_start_time_ms.store(now, Ordering::Relaxed);

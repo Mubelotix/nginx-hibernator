@@ -46,6 +46,7 @@ pub struct ServiceRuntime {
     pub down_check_interval_ms: AtomicU64,
     pub endpoint: Mutex<String>,
     pub state: AtomicU8,
+    shared_state: Option<SharedStateRef>,
     pub state_change_notify: Notify,
     
     pub startup_start_time_ms: AtomicU64,
@@ -58,7 +59,7 @@ pub struct ServiceRuntime {
 }
 
 impl ServiceRuntime {
-    pub fn new(service_id: String) -> Self {
+    pub fn new(service_id: String, shared_state: Option<SharedStateRef>) -> Self {
         Self {
             service_id,
             last_activity_secs: AtomicU64::new(now_secs()),
@@ -73,6 +74,7 @@ impl ServiceRuntime {
             down_check_interval_ms: AtomicU64::new(60_000),
             endpoint: Mutex::new("/ready".to_owned()),
             state: AtomicU8::new(ServiceHealthState::Unknown.as_u8()),
+            shared_state,
             state_change_notify: Notify::new(),
             startup_start_time_ms: AtomicU64::new(0),
             expected_startup_duration_ms: AtomicU64::new(0),
@@ -84,19 +86,33 @@ impl ServiceRuntime {
     }
 
     pub fn state(&self) -> ServiceHealthState {
-        ServiceHealthState::from_u8(self.state.load(Ordering::Relaxed))
+        let raw = if let Some(shared) = self.shared_state {
+            shared.load_state()
+        } else {
+            self.state.load(Ordering::Relaxed)
+        };
+        ServiceHealthState::from_u8(raw)
     }
 
     pub fn set_state_without_notify(&self, state: ServiceHealthState) {
+        if let Some(shared) = self.shared_state {
+            shared.store_state(state.as_u8());
+        }
         self.state.store(state.as_u8(), Ordering::Relaxed);
     }
 
     pub fn set_state(&self, state: ServiceHealthState) {
-        let previous = self.state.swap(state.as_u8(), Ordering::AcqRel);
+        let previous = if let Some(shared) = self.shared_state {
+            shared.swap_state(state.as_u8())
+        } else {
+            self.state.swap(state.as_u8(), Ordering::AcqRel)
+        };
+        self.state.store(state.as_u8(), Ordering::Relaxed);
         if previous != state.as_u8() {
             self.state_change_notify.notify_waiters();
         }
     }
+
 
     pub fn history_file(&self) -> Option<String> {
         if !self.eta_enabled.load(Ordering::Relaxed) {
@@ -123,6 +139,10 @@ impl ServiceRuntime {
     }
 }
 
+mod shared_state;
+
+pub use shared_state::{ensure_shared_state_zone, shared_state_for, SharedStateRef};
+
 pub static SERVICE_RUNTIMES: LazyLock<Mutex<HashMap<String, Arc<ServiceRuntime>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub fn runtime_for(service_id: &str) -> Arc<ServiceRuntime> {
@@ -131,7 +151,7 @@ pub fn runtime_for(service_id: &str) -> Arc<ServiceRuntime> {
         return Arc::clone(existing);
     }
 
-    let runtime = Arc::new(ServiceRuntime::new(service_id.to_owned()));
+    let runtime = Arc::new(ServiceRuntime::new(service_id.to_owned(), shared_state_for(service_id)));
     spawn_idle_monitor(service_id.to_owned(), Arc::clone(&runtime));
     map.insert(service_id.to_owned(), Arc::clone(&runtime));
     runtime

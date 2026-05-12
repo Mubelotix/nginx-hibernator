@@ -43,7 +43,7 @@ mod nginx_async;
 use check::{
     ensure_service_health_monitor, start_registered_service_health_monitors,
 };
-use state::is_service_up;
+use state::{ensure_shared_state_zone, is_service_up};
 use config::{ModuleConfig, NGX_HTTP_HIBERNATOR_COMMANDS};
 use hibernate::touch_activity;
 use landing::{is_landing_prefixed_uri, serve_landing_page, serve_landing_prefixed_asset};
@@ -59,7 +59,7 @@ impl http::HttpModule for Module {
     }
 
     unsafe extern "C" fn postconfiguration(cf: *mut ngx_conf_t) -> ngx_int_t {
-        if register_access_handler(cf).is_ok() {
+        if ensure_shared_state_zone(cf) && register_access_handler(cf).is_ok() {
             Status::NGX_OK.into()
         } else {
             Status::NGX_ERROR.into()
