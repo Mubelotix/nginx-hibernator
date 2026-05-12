@@ -7,6 +7,9 @@ permissions:
   id-token: write
 
 on:
+  push:
+    paths:
+      - Cargo.toml
   schedule:
     # Check daily for new nginx releases
     - cron: '0 2 * * *'
@@ -23,6 +26,8 @@ jobs:
     outputs:
       needs_release: ${{ steps.check.outputs.needs_release }}
       nginx_version: ${{ steps.check.outputs.nginx_version }}
+      hibernator_version: ${{ steps.check.outputs.hibernator_version }}
+      release_tag: ${{ steps.check.outputs.release_tag }}
       pkg_version: ${{ steps.check.outputs.pkg_version }}
     steps:
       - uses: actions/checkout@v4
@@ -32,6 +37,9 @@ jobs:
       - name: Check for new nginx version
         id: check
         run: |
+          HIBERNATOR_VERSION="$(awk -F'"' '/^version\s*=\s*"/ {print $2; exit}' Cargo.toml)"
+          test -n "$HIBERNATOR_VERSION"
+
           # Get current nginx version from Debian trixie
           NGINX_VERSION=$(apt-cache policy nginx 2>/dev/null | grep Candidate | awk '{print $2}' || curl -s https://packages.debian.org/trixie/nginx | grep -oP 'nginx/\K[0-9.]+' | head -1)
           
@@ -39,15 +47,19 @@ jobs:
             NGINX_VERSION=$(curl -s https://packages.debian.org/trixie/nginx | grep -oP 'nginx/\K[0-9.]+' | head -1)
           fi
           
+          RELEASE_TAG="v${HIBERNATOR_VERSION}-nginx-${NGINX_VERSION}"
+
           echo "nginx_version=$NGINX_VERSION" >> $GITHUB_OUTPUT
+          echo "hibernator_version=$HIBERNATOR_VERSION" >> $GITHUB_OUTPUT
+          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
           
-          # Check if this version is already in git tags
-          if git rev-parse "v$NGINX_VERSION" >/dev/null 2>&1 && [ "${{ github.event.inputs.force_release }}" != "true" ]; then
+          # Check if this hibernator+nginx combination is already released.
+          if git rev-parse "$RELEASE_TAG" >/dev/null 2>&1 && [ "${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force_release == 'true' }}" != "true" ]; then
             echo "needs_release=false" >> $GITHUB_OUTPUT
-            echo "Version $NGINX_VERSION already released"
+            echo "Version combination already released: $RELEASE_TAG"
           else
             echo "needs_release=true" >> $GITHUB_OUTPUT
-            echo "Building for nginx $NGINX_VERSION"
+            echo "Building release for $RELEASE_TAG"
           fi
           
           # Package version includes the nginx version
@@ -63,13 +75,6 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Read hibernator version
-        id: hibernator_version
-        run: |
-          VERSION="$(awk -F'"' '/^version\s*=\s*"/ {print $2; exit}' Cargo.toml)"
-          test -n "$VERSION"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
@@ -112,8 +117,8 @@ jobs:
         id: create_release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: v${{ needs.check-and-build.outputs.nginx_version }}
-          name: ${{ github.event.repository.name }} ${{ steps.hibernator_version.outputs.version }} for nginx v${{ needs.check-and-build.outputs.nginx_version }}
+          tag_name: ${{ needs.check-and-build.outputs.release_tag }}
+          name: ${{ github.event.repository.name }} ${{ needs.check-and-build.outputs.hibernator_version }} for nginx v${{ needs.check-and-build.outputs.nginx_version }}
           body: |
             Built against nginx ${{ needs.check-and-build.outputs.nginx_version }} from Debian trixie
             
