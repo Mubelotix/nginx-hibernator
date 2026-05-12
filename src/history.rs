@@ -8,16 +8,19 @@ pub static SERVICE_HISTORY: LazyLock<ServiceHistory> = LazyLock::new(|| ServiceH
 pub struct ServiceHistory(Arc<RwLock<HashMap<String, Vec<usize>>>>);
 
 async fn read_file(file: &str) -> Vec<usize> {
-    let Ok(content) = read_to_string(file).await else {
-        return Vec::new();
-    };
-    content.lines().filter_map(|line| line.parse().ok()).collect()
+    match read_to_string(file).await {
+        Ok(content) => content.lines().filter_map(|line| line.parse().ok()).collect(),
+        Err(e) => {
+            elog!("Failed to read file {file}: {e}");
+            Vec::new()
+        },
+    }
 }
 
 async fn write_file(file: &str, values: &[usize]) {
     let content = values.iter().map(|v| v.to_string()).collect::<Vec<String>>().join("\n");
-    let Ok(_) = tokio::fs::write(file, content).await else {
-        return;
+    if let Err(e) = tokio::fs::write(file, content).await {
+        elog!("Failed to write {file}: {e}");
     };
 }
 
@@ -33,12 +36,14 @@ fn compute_eta(mut values: &[usize], percentile: usize, count: usize) -> Option<
 
 impl ServiceHistory {
     pub async fn put_history(&self, file: &str, new_val: usize) {
-        let cache = self.0.write().await;
+        let mut cache = self.0.write().await;
         let mut values = match cache.get(file) {
             Some(values) => values.clone(),
             None => read_file(file).await, // TODO: Should not read while we lock for write
         };
         values.push(new_val);
+        cache.insert(file.to_string(), values.clone());
+        drop(cache);
         write_file(file, &values).await;
     }
 
