@@ -116,7 +116,7 @@ impl HibernatorRequestHandler {
 
         if let Ok(uri) = request.path().to_str() {
             if is_landing_prefixed_uri(uri) {
-                return serve_landing_prefixed_asset(request, conf.landing_dir.as_deref());
+                return serve_landing_prefixed_asset(request, &conf.landing_dir);
             }
         }
 
@@ -135,7 +135,7 @@ impl HibernatorRequestHandler {
             );
             return serve_landing_page(
                 request,
-                conf.landing_dir.as_deref(),
+                &conf.landing_dir,
                 &health_service_id,
                 conf.keep_alive_secs,
             );
@@ -180,7 +180,7 @@ impl HibernatorRequestHandler {
             }
             serve_landing_page(
                 request,
-                conf.landing_dir.as_deref(),
+                &conf.landing_dir,
                 &health_service_id,
                 conf.keep_alive_secs,
             )

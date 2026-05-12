@@ -83,7 +83,7 @@ http {
       hibernator_start_check_interval 100ms;
 
       # Folder containing landing page files (index.html + assets).
-      # If not set, the built-in default page is used.
+      # Default: /usr/share/nginx-hibernator/landing
       hibernator_landing_dir /var/www/landing;
 
       # --- Startup ETA Options ---
@@ -113,7 +113,7 @@ http {
 
 ## Landing Page
 
-When a service is hibernated, an incoming request triggers its startup. During this time, NGINX returns a `503 Service Unavailable` response with the content of `index.html` from the `hibernator_landing_dir`.
+When a service is hibernated, an incoming request triggers its startup. During this time, NGINX returns a `503 Service Unavailable` response with the content of `index.html` from the `hibernator_landing_dir`. When installed from the deb package, the default landing page is located at `/usr/share/nginx-hibernator/landing/` and is used automatically.
 
 The following placeholders are automatically replaced in the HTML:
 - `{{ETA_SECONDS}}`: Estimated seconds remaining.

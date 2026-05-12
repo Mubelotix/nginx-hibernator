@@ -13,12 +13,12 @@ unsafe extern "C" {
     fn ngx_http_finalize_request(r: *mut ngx_http_request_t, rc: ngx_int_t);
 }
 
-const DEFAULT_LANDING_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Service starting</title><style>body{font-family:system-ui,Segoe UI,sans-serif;margin:40px;color:#222}main{max-width:680px}h1{font-size:1.6rem;margin-bottom:.4rem}p{line-height:1.45}</style></head><body><main><h1>Service is waking up</h1><p>The upstream service is currently hibernated and is being started.</p><p>Please refresh in a few seconds.</p><p id=\"eta\"></p></main><script>var eta=parseInt('{{ETA_SECONDS}}',10);if(eta>0){var el=document.getElementById('eta');var update=function(){el.innerText='Estimated time left: '+eta+'s';if(eta<=0){location.reload();}eta--;};update();setInterval(update,1000);}</script></body></html>";
 const LANDING_PREFIX: &str = "/hibernator-landing/";
+pub const DEFAULT_LANDING_DIR: &str = "/usr/share/nginx-hibernator/landing";
 
 pub fn serve_landing_page(
     request: &mut Request,
-    landing_dir: Option<&str>,
+    landing_dir: &str,
     service_id: &str,
     keep_alive_secs: u64,
 ) -> Status {
@@ -29,12 +29,7 @@ pub fn serve_landing_page(
 
     let elapsed = if start > 0 { now.saturating_sub(start) } else { 0 };
 
-    let Some(dir) = landing_dir else {
-        let body = apply_eta(DEFAULT_LANDING_HTML.as_bytes().to_vec(), "text/html; charset=utf-8", elapsed, expected, keep_alive_secs);
-        return send_page_response(request, &body, "text/html; charset=utf-8", http::HTTPStatus::SERVICE_UNAVAILABLE);
-    };
-
-    let dir = dir.to_owned();
+    let dir = landing_dir.to_owned();
     let result = perform_async(request, Module::module(), || async move {
         read_landing_asset_by_rel_path_async(&dir, "index.html").await
     });
@@ -44,7 +39,7 @@ pub fn serve_landing_page(
     };
 
     let (body, content_type) = result.unwrap_or_else(|| {
-        (DEFAULT_LANDING_HTML.as_bytes().to_vec(), "text/html; charset=utf-8")
+        (b"Service is starting, please retry in a moment.\n".to_vec(), "text/plain")
     });
 
     let body = apply_eta(body, content_type, elapsed, expected, keep_alive_secs);
@@ -75,11 +70,7 @@ fn apply_eta(
     body
 }
 
-pub fn serve_landing_prefixed_asset(request: &mut Request, landing_dir: Option<&str>) -> Status {
-    let Some(dir) = landing_dir else {
-        return http::HTTPStatus::NOT_FOUND.into();
-    };
-
+pub fn serve_landing_prefixed_asset(request: &mut Request, landing_dir: &str) -> Status {
     let Ok(uri) = request.path().to_str() else {
         return http::HTTPStatus::NOT_FOUND.into();
     };
@@ -88,7 +79,7 @@ pub fn serve_landing_prefixed_asset(request: &mut Request, landing_dir: Option<&
         return http::HTTPStatus::NOT_FOUND.into();
     };
 
-    let dir = dir.to_owned();
+    let dir = landing_dir.to_owned();
     let rel_path = rel_path.to_owned();
     let result = perform_async(request, Module::module(), || async move {
         read_landing_asset_by_rel_path_async(&dir, &rel_path).await

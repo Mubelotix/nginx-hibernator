@@ -3,6 +3,5 @@
 target
 module
 ngx-rust
-landing
 tests
 **/*.log

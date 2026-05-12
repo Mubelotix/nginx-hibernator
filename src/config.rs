@@ -6,6 +6,7 @@ use ngx::ffi::{
 use ngx::http::{self, MergeConfigError};
 use ngx::{ngx_conf_log_error, ngx_string};
 use crate::check::{REGISTERED_MONITORS, ServiceMonitorConfig};
+use crate::landing::DEFAULT_LANDING_DIR;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ServiceCheckMode {
@@ -28,7 +29,7 @@ pub struct ModuleConfig {
     pub up_check_interval_ms: u64,
     pub starting_check_interval_ms: u64,
     pub down_check_interval_ms: u64,
-    pub landing_dir: Option<String>,
+    pub landing_dir: String,
     pub eta_enabled: Option<bool>,
     pub history_file: Option<String>,
     pub history_samples_count: usize,
@@ -50,7 +51,7 @@ impl Default for ModuleConfig {
             up_check_interval_ms: 10_000,
             starting_check_interval_ms: 100,
             down_check_interval_ms: 60_000,
-            landing_dir: None,
+            landing_dir: DEFAULT_LANDING_DIR.to_owned(),
             eta_enabled: None,
             history_file: None,
             history_samples_count: 40,
@@ -101,7 +102,7 @@ impl http::Merge for ModuleConfig {
         if self.down_check_interval_ms == defaults.down_check_interval_ms {
             self.down_check_interval_ms = prev.down_check_interval_ms;
         }
-        if self.landing_dir.is_none() {
+        if self.landing_dir == defaults.landing_dir {
             self.landing_dir = prev.landing_dir.clone();
         }
         if self.eta_enabled.is_none() {
@@ -615,7 +616,7 @@ extern "C" fn set_landing_dir(
         ngx_conf_log_error!(NGX_LOG_EMERG, cf, "landing dir cannot be empty");
         return ngx::core::NGX_CONF_ERROR;
     }
-    conf.landing_dir = Some(val);
+    conf.landing_dir = val;
     ngx::core::NGX_CONF_OK
 }
 

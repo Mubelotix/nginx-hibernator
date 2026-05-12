@@ -26,19 +26,19 @@ These can be used in your HTML or JavaScript to show progress bars or countdowns
 
 ## Configuration
 
-Point the NGINX module at this directory with `hibernator_landing_dir`:
+When installed from the deb package, this directory is placed at `/usr/share/nginx-hibernator/landing/` and used by default. You can override it with `hibernator_landing_dir`:
 
 ```nginx
 location / {
     hibernator on;
     hibernator_service_name my-app;
     hibernator_check_port 18081;
-    hibernator_landing_dir /var/www/nginx-hibernator/landing;
+    hibernator_landing_dir /var/www/my-custom-landing;
     proxy_pass http://backend;
 }
 ```
 
-If `hibernator_landing_dir` is not set or the directory cannot be read, the module falls back to a built-in HTML page.
+If `hibernator_landing_dir` is not set, the module uses `/usr/share/nginx-hibernator/landing/`.
 
 ## Authoring Notes
 

@@ -60,9 +60,11 @@ RUN mkdir -p /tmp/pkg/DEBIAN \
              /tmp/pkg/usr/lib/nginx/modules \
              /tmp/pkg/etc/nginx/modules-available \
              /tmp/pkg/etc/nginx/modules-enabled \
+             /tmp/pkg/usr/share/nginx-hibernator/landing \
              /artifacts \
     && install -m 0644 /work/target/release/libhibernator.so \
         /tmp/pkg/usr/lib/nginx/modules/libhibernator.so \
+    && cp -a /work/landing/. /tmp/pkg/usr/share/nginx-hibernator/landing/ \
     && printf '%s\n' 'load_module /usr/lib/nginx/modules/libhibernator.so;' \
         > /tmp/pkg/etc/nginx/modules-available/50-mod-hibernator.conf \
     && ln -s ../modules-available/50-mod-hibernator.conf \
