@@ -8,7 +8,6 @@ NGINX_PREFIX="$REPO_DIR/.local/nginx"
 NGINX_BIN="$NGINX_PREFIX/sbin/nginx"
 TARGET_DIR="${TARGET_DIR:-}"
 MODULE_SO="${MODULE_SO:-}"
-LANDING_DIR="$REPO_DIR/landing"
 BACKEND_PORT="18081"
 PROXY_PORT="18080"
 SERVICE_NAME="hibernator-demo-backend"
@@ -75,11 +74,6 @@ ensure_prereqs() {
     return 1
   fi
 
-  if [[ ! -d "$LANDING_DIR" ]]; then
-    log "landing directory not found: $LANDING_DIR"
-    return 1
-  fi
-
   if [[ -z "$PYTHON_BIN" ]] || [[ ! -x "$PYTHON_BIN" ]]; then
     log "python3 not found; set PYTHON_BIN to a valid interpreter path"
     return 1
@@ -124,7 +118,6 @@ http {
             hibernator_service_name $SERVICE_NAME;
             hibernator_check_port $BACKEND_PORT;
             hibernator_keep_alive ${KEEPALIVE_SECS}s;
-            hibernator_landing_dir $LANDING_DIR;
             proxy_pass http://backend;
         }
     }
