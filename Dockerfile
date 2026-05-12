@@ -71,7 +71,7 @@ RUN mkdir -p /tmp/pkg/DEBIAN \
 # Build the deb package
 RUN ARCH="$(dpkg --print-architecture)" \
     && INSTALLED_SIZE="$(du -sk /tmp/pkg/usr /tmp/pkg/etc | awk '{sum += $1} END {print sum}')" \
-    && printf 'Package: %s\nVersion: %s-%s\nSection: web\nPriority: optional\nArchitecture: %s\nDepends: nginx\nMaintainer: %s\nInstalled-Size: %s\nDescription: %s\n' \
+    && printf 'Package: %s\nVersion: %s-%s\nSection: web\nPriority: optional\nArchitecture: %s\nDepends: nginx, libdbus-1-3\nMaintainer: %s\nInstalled-Size: %s\nDescription: %s\n' \
         "${DEB_PACKAGE_NAME}" "${DEB_PACKAGE_VERSION}" "${DEB_PACKAGE_RELEASE}" "${ARCH}" "${DEB_MAINTAINER}" "${INSTALLED_SIZE}" "${DEB_DESCRIPTION}" \
         > /tmp/pkg/DEBIAN/control \
     && chmod 0644 /tmp/pkg/DEBIAN/control \

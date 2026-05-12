@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$SCRIPT_DIR"
+DEB_FILE="$(find "$REPO_DIR/target/docker" -maxdepth 1 -name '*.deb' | head -n 1)"
+
+if [[ -z "$DEB_FILE" ]]; then
+  printf 'Error: No .deb package found in target/docker\n' >&2
+  exit 1
+fi
+
+log() {
+  printf '[test-debian.sh] %s\n' "$*"
+}
+
+# Create a temporary test container name
+TEST_CONTAINER="nginx-hibernator-test-$$"
+TEST_IMAGE="nginx-hibernator-test:$$"
+
+cleanup() {
+  docker rm -f "$TEST_CONTAINER" >/dev/null 2>&1 || true
+  docker rmi -f "$TEST_IMAGE" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+cat > /tmp/Dockerfile.test <<'TESTEOF'
+FROM debian:trixie
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    nginx \
+    curl \
+    python3 \
+    libdbus-1-3 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /opt/test-service && cat > /opt/test-service/server.py <<'PYEOF'
+#!/usr/bin/env python3
+import http.server
+import socketserver
+import time
+import sys
+
+PORT = 18081
+
+class ReadyHandler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/ready':
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b'OK')
+        else:
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b'Hello from test service')
+    
+    def log_message(self, format, *args):
+        sys.stderr.write(f"[test-service] {format % args}\n")
+
+with socketserver.TCPServer(("", PORT), ReadyHandler) as httpd:
+    print(f"Test service listening on port {PORT}")
+    sys.stderr.flush()
+    httpd.serve_forever()
+PYEOF
+RUN chmod +x /opt/test-service/server.py
+TESTEOF
+
+log "building test image"
+docker build -f /tmp/Dockerfile.test -t "$TEST_IMAGE" "$REPO_DIR"
+
+log "creating test container"
+docker create --name "$TEST_CONTAINER" \
+  -p 8080:80 \
+  -v "$DEB_FILE:/tmp/package.deb:ro" \
+  "$TEST_IMAGE" \
+  /bin/bash -c "tail -f /dev/null"
+
+log "starting test container"
+docker start "$TEST_CONTAINER"
+sleep 1
+
+log "installing the hibernator module package"
+docker exec "$TEST_CONTAINER" bash -c 'apt-get update && apt-get install -y /tmp/package.deb && nginx -s stop 2>/dev/null || true'
+
+sleep 1
+
+log "configuring hibernator module for testing"
+docker exec "$TEST_CONTAINER" bash -c '
+cat > /etc/nginx/nginx.conf <<'\''EOF'\''
+load_module /usr/lib/nginx/modules/libhibernator.so;
+
+user www-data;
+worker_processes auto;
+pid /run/nginx.pid;
+
+events {
+  worker_connections 1024;
+}
+
+http {
+  sendfile on;
+  tcp_nopush on;
+  types_hash_max_size 2048;
+
+  include /etc/nginx/mime.types;
+  default_type application/octet-stream;
+
+  access_log /var/log/nginx/access.log;
+  error_log /var/log/nginx/error.log;
+
+  upstream test_backend {
+    server 127.0.0.1:18081;
+  }
+
+  server {
+    listen 80;
+    server_name _;
+
+    location / {
+      hibernator on;
+      hibernator_service_name test-service;
+      hibernator_check_port 18081;
+      hibernator_check_mode http;
+      hibernator_check_endpoint /ready;
+      hibernator_check_timeout 100ms;
+      hibernator_keep_alive 30s;
+      hibernator_start_timeout 30s;
+
+      proxy_pass http://test_backend;
+    }
+  }
+}
+EOF
+'
+
+log "starting nginx"
+docker exec -d "$TEST_CONTAINER" sh -c 'nginx -g "daemon off;" &'
+
+# Wait for nginx to start
+sleep 3
+
+log "test 1: first request should get landing page (503) - service not yet started"
+http_code=$(docker exec "$TEST_CONTAINER" curl -s -o /tmp/response.html -w '%{http_code}' http://localhost:80/ 2>&1 || echo "FAIL")
+
+if [[ "$http_code" == "503" ]]; then
+  log "✓ Got 503 response as expected"
+  body=$(docker exec "$TEST_CONTAINER" cat /tmp/response.html)
+  if echo "$body" | grep -q "hibernator\|landing\|ETA\|DURATION\|Service Unavailable" 2>/dev/null; then
+    log "✓ Response contains landing page content"
+  else
+    log "⚠ Response content (first 300 chars):"
+    echo "$body" | head -c 300
+  fi
+else
+  log "⚠ Got $http_code instead of 503 (service may have started quickly)"
+fi
+
+log "starting the test service in background now"
+docker exec -d "$TEST_CONTAINER" /opt/test-service/server.py
+
+log "test 2: waiting for service to start (5 seconds)"
+sleep 5
+
+log "test 3: second request should reach actual service"
+http_code=$(docker exec "$TEST_CONTAINER" curl -s -o /tmp/response2.html -w '%{http_code}' http://localhost:80/ 2>&1 || echo "FAIL")
+
+if [[ "$http_code" == "200" ]]; then
+  log "✓ Got 200 response"
+  body=$(docker exec "$TEST_CONTAINER" cat /tmp/response2.html)
+  if echo "$body" | grep -q "Hello from test service"; then
+    log "✓ Got response from actual service"
+  else
+    log "⚠ Response doesn't match expected text: $body"
+  fi
+else
+  log "✗ Expected 200, got $http_code"
+  docker exec "$TEST_CONTAINER" cat /tmp/response2.html 2>&1
+  exit 1
+fi
+
+log "all tests passed!"
