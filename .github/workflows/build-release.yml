@@ -1,5 +1,9 @@
 name: Build and Release Debian Package
 
+permissions:
+  contents: write
+  packages: write
+
 on:
   schedule:
     # Check daily for new nginx releases
