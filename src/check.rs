@@ -117,8 +117,10 @@ async fn monitor_service_health(runtime: Arc<ServiceRuntime>) {
         let next_state = if is_up {
             if runtime.state() == ServiceHealthState::Starting {
                 let start = runtime.startup_start_time_ms.load(Ordering::Relaxed);
+                let now_ms = now_ms();
+                let now_secs = now_ms / 1000;
                 if start > 0 {
-                    let duration = now_ms().saturating_sub(start);
+                    let duration = now_ms.saturating_sub(start);
                     if let Some(history_file) = runtime.history_file() {
                         let rt = Arc::clone(&runtime);
                         spawn_future_on_runtime(async move {
@@ -129,6 +131,7 @@ async fn monitor_service_health(runtime: Arc<ServiceRuntime>) {
                         });
                     }
                 }
+                runtime.last_activity_secs.store(now_secs, Ordering::Relaxed);
             }
             ServiceHealthState::Up
         } else if runtime.state() == ServiceHealthState::Starting {

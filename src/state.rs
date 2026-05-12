@@ -36,7 +36,6 @@ pub struct ServiceRuntime {
     pub service_id: String,
     pub last_activity_secs: AtomicU64,
     pub keep_alive_secs: AtomicU64,
-    pub started_by_module: AtomicBool,
 
     pub mode: AtomicU8,
     pub port: AtomicU16,
@@ -64,7 +63,6 @@ impl ServiceRuntime {
             service_id,
             last_activity_secs: AtomicU64::new(now_secs()),
             keep_alive_secs: AtomicU64::new(300),
-            started_by_module: AtomicBool::new(false),
 
             mode: AtomicU8::new(0),
             port: AtomicU16::new(0),
@@ -89,7 +87,7 @@ impl ServiceRuntime {
         let raw = if let Some(shared) = self.shared_state {
             shared.load_state()
         } else {
-            self.state.load(Ordering::Relaxed)
+            self.state.load(Ordering::Acquire)
         };
         ServiceHealthState::from_u8(raw)
     }
@@ -98,7 +96,7 @@ impl ServiceRuntime {
         if let Some(shared) = self.shared_state {
             shared.store_state(state.as_u8());
         }
-        self.state.store(state.as_u8(), Ordering::Relaxed);
+        self.state.store(state.as_u8(), Ordering::Release);
     }
 
     pub fn set_state(&self, state: ServiceHealthState) {
@@ -107,7 +105,7 @@ impl ServiceRuntime {
         } else {
             self.state.swap(state.as_u8(), Ordering::AcqRel)
         };
-        self.state.store(state.as_u8(), Ordering::Relaxed);
+        self.state.store(state.as_u8(), Ordering::Release);
         if previous != state.as_u8() {
             self.state_change_notify.notify_waiters();
         }
@@ -132,7 +130,7 @@ impl ServiceRuntime {
         };
 
         if changed {
-            self.state.store(target, Ordering::Relaxed);
+            self.state.store(target, Ordering::Release);
         }
         changed
     }

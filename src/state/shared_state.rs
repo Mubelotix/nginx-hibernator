@@ -30,11 +30,11 @@ unsafe impl Sync for SharedStateRef {}
 
 impl SharedStateRef {
     pub fn load_state(self) -> u8 {
-        unsafe { self.0.as_ref().state.load(Ordering::Relaxed) }
+        unsafe { self.0.as_ref().state.load(Ordering::Acquire) }
     }
 
     pub fn store_state(self, value: u8) {
-        unsafe { self.0.as_ref().state.store(value, Ordering::Relaxed) }
+        unsafe { self.0.as_ref().state.store(value, Ordering::Release) }
     }
 
     pub fn swap_state(self, value: u8) -> u8 {

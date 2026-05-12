@@ -8,7 +8,6 @@ pub fn touch_activity(service_name: &str, keep_alive_secs: u64) {
     let rt = runtime_for(service_name);
     rt.keep_alive_secs.store(keep_alive_secs, Ordering::Relaxed);
     rt.last_activity_secs.store(now_secs(), Ordering::Relaxed);
-    rt.started_by_module.store(true, Ordering::Relaxed);
 }
 
 pub(crate) fn spawn_idle_monitor(service_name: String, runtime: Arc<ServiceRuntime>) {
@@ -16,10 +15,6 @@ pub(crate) fn spawn_idle_monitor(service_name: String, runtime: Arc<ServiceRunti
     let spawned = spawn_future_on_runtime(async move {
         loop {
             sleep(Duration::from_secs(1)).await;
-
-            if !runtime.started_by_module.load(Ordering::Relaxed) {
-                continue;
-            }
 
             let keep_alive = runtime.keep_alive_secs.load(Ordering::Relaxed);
             if keep_alive == 0 {
