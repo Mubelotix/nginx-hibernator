@@ -10,9 +10,6 @@ on:
   push:
     paths:
       - Cargo.toml
-  schedule:
-    # Check daily for new nginx releases
-    - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
       force_release:
@@ -21,73 +18,55 @@ on:
         type: boolean
 
 jobs:
-  check-and-build:
-    runs-on: ubuntu-latest
-    outputs:
-      needs_release: ${{ steps.check.outputs.needs_release }}
-      nginx_version: ${{ steps.check.outputs.nginx_version }}
-      hibernator_version: ${{ steps.check.outputs.hibernator_version }}
-      release_tag: ${{ steps.check.outputs.release_tag }}
-      pkg_version: ${{ steps.check.outputs.pkg_version }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Check for new nginx version
-        id: check
-        run: |
-          HIBERNATOR_VERSION="$(awk -F'"' '/^version\s*=\s*"/ {print $2; exit}' Cargo.toml)"
-          test -n "$HIBERNATOR_VERSION"
-
-          # Get current nginx version from Debian trixie
-          NGINX_VERSION=$(apt-cache policy nginx 2>/dev/null | grep Candidate | awk '{print $2}' || curl -s https://packages.debian.org/trixie/nginx | grep -oP 'nginx/\K[0-9.]+' | head -1)
-          
-          if [ -z "$NGINX_VERSION" ]; then
-            NGINX_VERSION=$(curl -s https://packages.debian.org/trixie/nginx | grep -oP 'nginx/\K[0-9.]+' | head -1)
-          fi
-          
-          RELEASE_TAG="v${HIBERNATOR_VERSION}-nginx-${NGINX_VERSION}"
-
-          echo "nginx_version=$NGINX_VERSION" >> $GITHUB_OUTPUT
-          echo "hibernator_version=$HIBERNATOR_VERSION" >> $GITHUB_OUTPUT
-          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
-          
-          # Check if this hibernator+nginx combination is already released.
-          if git rev-parse "$RELEASE_TAG" >/dev/null 2>&1 && [ "${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force_release == 'true' }}" != "true" ]; then
-            echo "needs_release=false" >> $GITHUB_OUTPUT
-            echo "Version combination already released: $RELEASE_TAG"
-          else
-            echo "needs_release=true" >> $GITHUB_OUTPUT
-            echo "Building release for $RELEASE_TAG"
-          fi
-          
-          # Package version includes the nginx version
-          PKG_VERSION="${NGINX_VERSION}-$(date +%s)"
-          echo "pkg_version=$PKG_VERSION" >> $GITHUB_OUTPUT
-
-  build:
-    needs: check-and-build
-    if: needs.check-and-build.outputs.needs_release == 'true'
+  build-release:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve versions and release tag
+        id: versions
+        run: |
+          HIBERNATOR_VERSION="$(awk -F'"' '/^version\s*=\s*"/ {print $2; exit}' Cargo.toml)"
+          test -n "$HIBERNATOR_VERSION"
+
+          NGINX_VERSION=$(apt-cache policy nginx 2>/dev/null | grep Candidate | awk '{print $2}' || curl -s https://packages.debian.org/trixie/nginx | grep -oP 'nginx/\K[0-9.]+' | head -1)
+          if [ -z "$NGINX_VERSION" ]; then
+            NGINX_VERSION=$(curl -s https://packages.debian.org/trixie/nginx | grep -oP 'nginx/\K[0-9.]+' | head -1)
+          fi
+
+          RELEASE_TAG="v${HIBERNATOR_VERSION}-nginx-${NGINX_VERSION}"
+          FORCE_RELEASE="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force_release == 'true' }}"
+          SHOULD_RELEASE=true
+          if git rev-parse "$RELEASE_TAG" >/dev/null 2>&1 && [ "$FORCE_RELEASE" != "true" ]; then
+            SHOULD_RELEASE=false
+          fi
+
+          echo "hibernator_version=$HIBERNATOR_VERSION" >> "$GITHUB_OUTPUT"
+          echo "nginx_version=$NGINX_VERSION" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "should_release=$SHOULD_RELEASE" >> "$GITHUB_OUTPUT"
 
       - name: Configure GitHub Pages
+        if: steps.versions.outputs.should_release == 'true'
         uses: actions/configure-pages@v5
 
       - name: Set up Docker Buildx
+        if: steps.versions.outputs.should_release == 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Build Debian package
+        if: steps.versions.outputs.should_release == 'true'
         run: |
           ./scripts/debian-build.sh
           ls -lh target/docker/
 
       - name: Test package
+        if: steps.versions.outputs.should_release == 'true'
         run: |
           timeout 120 ./test-debian.sh 2>&1 | tee test-output.log
           if grep -q "all tests passed" test-output.log; then
@@ -100,7 +79,7 @@ jobs:
           fi
 
       - name: Upload test logs
-        if: always()
+        if: always() && steps.versions.outputs.should_release == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: test-logs
@@ -108,6 +87,7 @@ jobs:
 
       - name: Find built package
         id: pkg
+        if: steps.versions.outputs.should_release == 'true'
         run: |
           PKG=$(find target/docker -maxdepth 1 -name '*.deb' -type f)
           echo "package=$PKG" >> $GITHUB_OUTPUT
@@ -115,12 +95,13 @@ jobs:
 
       - name: Create Release
         id: create_release
+        if: steps.versions.outputs.should_release == 'true'
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ needs.check-and-build.outputs.release_tag }}
-          name: ${{ github.event.repository.name }} ${{ needs.check-and-build.outputs.hibernator_version }} for nginx v${{ needs.check-and-build.outputs.nginx_version }}
+          tag_name: ${{ steps.versions.outputs.release_tag }}
+          name: ${{ github.event.repository.name }} ${{ steps.versions.outputs.hibernator_version }} for nginx v${{ steps.versions.outputs.nginx_version }}
           body: |
-            Built against nginx ${{ needs.check-and-build.outputs.nginx_version }} from Debian trixie
+            Built against nginx ${{ steps.versions.outputs.nginx_version }} from Debian trixie
             
             ## Installation
             
@@ -142,11 +123,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload to releases for APT repo
+        if: steps.versions.outputs.should_release == 'true'
         run: |
           mkdir -p apt-repo/pool/main/n/nginx-hibernator
           cp ${{ steps.pkg.outputs.package }} apt-repo/pool/main/n/nginx-hibernator/
 
       - name: Generate APT repository metadata
+        if: steps.versions.outputs.should_release == 'true'
         run: |
           cd apt-repo
           
@@ -170,6 +153,7 @@ jobs:
           cd ..
 
       - name: Import APT signing key
+        if: steps.versions.outputs.should_release == 'true'
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
         run: |
@@ -183,6 +167,7 @@ jobs:
           echo "key_fpr=$KEY_FPR" >> "$GITHUB_OUTPUT"
 
       - name: Sign APT repository metadata
+        if: steps.versions.outputs.should_release == 'true'
         run: |
           export GNUPGHOME="$RUNNER_TEMP/gnupg"
           cd apt-repo
@@ -193,6 +178,7 @@ jobs:
           gpg --armor --export > dists/trixie/repo-public.key
 
       - name: Generate APT repository landing page
+        if: steps.versions.outputs.should_release == 'true'
         run: |
           cat > apt-repo/index.html <<'EOF'
           <!doctype html>
@@ -221,26 +207,18 @@ jobs:
           EOF
 
       - name: Upload APT repository artifact
+        if: steps.versions.outputs.should_release == 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./apt-repo
 
       - name: Deploy APT repository to GitHub Pages
         id: deployment
+        if: steps.versions.outputs.should_release == 'true'
         uses: actions/deploy-pages@v4
 
-  notify:
-    needs: [check-and-build, build]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check build status
+      - name: Skip duplicate release
+        if: steps.versions.outputs.should_release != 'true'
         run: |
-          if [ "${{ needs.build.result }}" == "success" ]; then
-            echo "✅ Package successfully built and tested for nginx ${{ needs.check-and-build.outputs.nginx_version }}"
-          elif [ "${{ needs.build.result }}" == "skipped" ]; then
-            echo "⏭️  No new nginx version to build"
-          else
-            echo "❌ Build or tests failed"
-            exit 1
-          fi
+          echo "Release already exists for ${{ steps.versions.outputs.release_tag }}."
+          echo "Use workflow_dispatch with force_release=true to rebuild anyway."
