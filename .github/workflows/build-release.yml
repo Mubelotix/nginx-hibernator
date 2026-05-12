@@ -99,7 +99,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.versions.outputs.release_tag }}
-          name: ${{ github.event.repository.name }} ${{ steps.versions.outputs.hibernator_version }} for nginx v${{ steps.versions.outputs.nginx_version }}
+          name: v${{ steps.versions.outputs.hibernator_version }} for nginx v${{ steps.versions.outputs.nginx_version }}
           body: |
             Built against nginx ${{ steps.versions.outputs.nginx_version }} from Debian trixie
             
