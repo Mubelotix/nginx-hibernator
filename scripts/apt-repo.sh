@@ -45,7 +45,7 @@ gzip -k dists/trixie/main/binary-$PKG_ARCH/Packages
 
 # Generate Release file
 log "Generating Release file..."
-cat > dists/trixie/Release <<'EOF'
+cat > dists/trixie/Release <<EOF
 Origin: nginx-hibernator
 Label: nginx-hibernator
 Suite: trixie
@@ -54,7 +54,22 @@ Version: 13.0
 Architectures: amd64 arm64
 Components: main
 Description: nginx-hibernator module packages
+Date: $(date -Ru)
 EOF
+
+# Append hash entries
+cd dists/trixie
+{
+  echo "MD5Sum:"
+  for f in main/binary-$PKG_ARCH/Packages main/binary-$PKG_ARCH/Packages.gz; do
+    [ -f "$f" ] && printf ' %s %16d %s\n' "$(md5sum "$f" | awk '{print $1}')" "$(stat -c%s "$f")" "$f"
+  done
+  echo "SHA256:"
+  for f in main/binary-$PKG_ARCH/Packages main/binary-$PKG_ARCH/Packages.gz; do
+    [ -f "$f" ] && printf ' %s %16d %s\n' "$(sha256sum "$f" | awk '{print $1}')" "$(stat -c%s "$f")" "$f"
+  done
+} >> Release
+cd ../..
 
 if ! command -v gpg >/dev/null 2>&1; then
   log "Error: gpg is required to sign the repository metadata"

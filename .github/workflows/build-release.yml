@@ -107,7 +107,13 @@ jobs:
             
             Add the APT repository from GitHub Pages:
             ```bash
-            echo "deb [trusted=yes] https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/ trixie main" | sudo tee /etc/apt/sources.list.d/nginx-hibernator.list
+            # Install the repository public key
+            curl -fsSL https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/dists/trixie/repo-public.key | sudo gpg --dearmor -o /usr/share/keyrings/nginx-hibernator.gpg
+            
+            # Add the repository
+            echo "deb [signed-by=/usr/share/keyrings/nginx-hibernator.gpg] https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }} trixie main" | sudo tee /etc/apt/sources.list.d/nginx-hibernator.list
+            
+            # Install
             sudo apt-get update
             sudo apt-get install nginx-hibernator-module
             ```
@@ -132,13 +138,13 @@ jobs:
         if: steps.versions.outputs.should_release == 'true'
         run: |
           cd apt-repo
-          
+
           # Create Packages file
           mkdir -p dists/trixie/main/binary-amd64
           dpkg-scanpackages --multiversion pool/main/ > dists/trixie/main/binary-amd64/Packages
           gzip -k dists/trixie/main/binary-amd64/Packages
-          
-          # Create Release file
+
+          # Create Release file with proper Date and hash entries
           cat > dists/trixie/Release <<EOF
           Origin: nginx-hibernator
           Label: nginx-hibernator
@@ -148,8 +154,23 @@ jobs:
           Architectures: amd64
           Components: main
           Description: nginx-hibernator module packages
+          Date: $(date -Ru)
           EOF
-          
+
+          # Append MD5Sum and SHA256 hash entries
+          cd dists/trixie
+          {
+            echo "MD5Sum:"
+            for f in main/binary-amd64/Packages main/binary-amd64/Packages.gz; do
+              [ -f "$f" ] && printf ' %s %16d %s\n' "$(md5sum "$f" | awk '{print $1}')" "$(stat -c%s "$f")" "$f"
+            done
+            echo "SHA256:"
+            for f in main/binary-amd64/Packages main/binary-amd64/Packages.gz; do
+              [ -f "$f" ] && printf ' %s %16d %s\n' "$(sha256sum "$f" | awk '{print $1}')" "$(stat -c%s "$f")" "$f"
+            done
+          } >> Release
+          cd ../..
+
           cd ..
 
       - name: Import APT signing key
