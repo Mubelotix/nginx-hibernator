@@ -39,7 +39,7 @@ jobs:
             NGINX_VERSION=$(curl -s https://packages.debian.org/trixie/nginx | grep -oP 'nginx/\K[0-9.]+' | head -1)
           fi
 
-          RELEASE_TAG="v${HIBERNATOR_VERSION}-nginx-${NGINX_VERSION}"
+          RELEASE_TAG="v${HIBERNATOR_VERSION}"
           FORCE_RELEASE="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force_release == 'true' }}"
           SHOULD_RELEASE=true
           if git rev-parse "$RELEASE_TAG" >/dev/null 2>&1 && [ "$FORCE_RELEASE" != "true" ]; then
