@@ -113,6 +113,30 @@ impl ServiceRuntime {
         }
     }
 
+    pub fn try_mark_starting(&self) -> bool {
+        let target = ServiceHealthState::Starting.as_u8();
+        let unknown = ServiceHealthState::Unknown.as_u8();
+        let down = ServiceHealthState::Down.as_u8();
+
+        let changed = if let Some(shared) = self.shared_state {
+            shared.compare_exchange_state(unknown, target)
+                || shared.compare_exchange_state(down, target)
+        } else {
+            self.state
+                .compare_exchange(unknown, target, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+                || self
+                    .state
+                    .compare_exchange(down, target, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+        };
+
+        if changed {
+            self.state.store(target, Ordering::Relaxed);
+        }
+        changed
+    }
+
 
     pub fn history_file(&self) -> Option<String> {
         if !self.eta_enabled.load(Ordering::Relaxed) {

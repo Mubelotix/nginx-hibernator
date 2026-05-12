@@ -122,27 +122,7 @@ async fn run_service_action(
 
 pub fn initiate_service_start(service_name: String) {
     let runtime = runtime_for(&service_name);
-    let target = ServiceHealthState::Starting.as_u8();
-    let success = runtime
-        .state
-        .compare_exchange(
-            ServiceHealthState::Unknown.as_u8(),
-            target,
-            Ordering::AcqRel,
-            Ordering::Relaxed,
-        )
-        .is_ok()
-        || runtime
-            .state
-            .compare_exchange(
-                ServiceHealthState::Down.as_u8(),
-                target,
-                Ordering::AcqRel,
-                Ordering::Relaxed,
-            )
-            .is_ok();
-
-    if !success {
+    if !runtime.try_mark_starting() {
         return;
     }
 
