@@ -106,7 +106,7 @@ impl ServiceRuntime {
         }
         match self.history_file.lock().unwrap().clone() {
             Some(r) => Some(r),
-            None => Some(format!("/var/lib/nginx/startup-times-{}.txt", self.service_id))
+            None => Some(format!("/var/lib/nginx/hibernator/startup-times-{}.txt", self.service_id))
         }
     }
 

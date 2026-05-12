@@ -61,6 +61,7 @@ RUN mkdir -p /tmp/pkg/DEBIAN \
              /tmp/pkg/etc/nginx/modules-available \
              /tmp/pkg/etc/nginx/modules-enabled \
              /tmp/pkg/usr/share/nginx-hibernator/landing \
+             /tmp/pkg/var/lib/nginx/hibernator \
              /artifacts \
     && install -m 0644 /work/target/release/libhibernator.so \
         /tmp/pkg/usr/lib/nginx/modules/libhibernator.so \
@@ -68,11 +69,13 @@ RUN mkdir -p /tmp/pkg/DEBIAN \
     && printf '%s\n' 'load_module /usr/lib/nginx/modules/libhibernator.so;' \
         > /tmp/pkg/etc/nginx/modules-available/50-mod-hibernator.conf \
     && ln -s ../modules-available/50-mod-hibernator.conf \
-        /tmp/pkg/etc/nginx/modules-enabled/50-mod-hibernator.conf
+        /tmp/pkg/etc/nginx/modules-enabled/50-mod-hibernator.conf \
+    && printf '#!/bin/sh\nset -e\nchown -R www-data:www-data /var/lib/nginx/hibernator\nchmod 755 /var/lib/nginx/hibernator\nexit 0\n' > /tmp/pkg/DEBIAN/postinst \
+    && chmod 0755 /tmp/pkg/DEBIAN/postinst
 
 # Build the deb package
 RUN ARCH="$(dpkg --print-architecture)" \
-    && INSTALLED_SIZE="$(du -sk /tmp/pkg/usr /tmp/pkg/etc | awk '{sum += $1} END {print sum}')" \
+    && INSTALLED_SIZE="$(du -sk /tmp/pkg/usr /tmp/pkg/etc /tmp/pkg/var | awk '{sum += $1} END {print sum}')" \
     && printf 'Package: %s\nVersion: %s-%s\nSection: web\nPriority: optional\nArchitecture: %s\nDepends: nginx, libdbus-1-3\nMaintainer: %s\nInstalled-Size: %s\nDescription: %s\n' \
         "${DEB_PACKAGE_NAME}" "${DEB_PACKAGE_VERSION}" "${DEB_PACKAGE_RELEASE}" "${ARCH}" "${DEB_MAINTAINER}" "${INSTALLED_SIZE}" "${DEB_DESCRIPTION}" \
         > /tmp/pkg/DEBIAN/control \

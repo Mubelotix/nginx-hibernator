@@ -93,8 +93,8 @@ http {
       hibernator_eta on;
 
       # File to store historical startup times for the service.
-      # Default: /var/lib/nginx/startup-times-{service}.txt
-      hibernator_history_file /var/lib/nginx/startup-times-myapp.txt;
+      # Default: /var/lib/nginx/hibernator/startup-times-{service}.txt
+      hibernator_history_file /var/lib/nginx/hibernator/startup-times-myapp.txt;
 
       # Number of recent samples to use for calculating the ETA.
       # Default: 40
