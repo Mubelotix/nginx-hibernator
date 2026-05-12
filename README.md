@@ -134,6 +134,20 @@ cd module
 
 This script builds NGINX, the module, and sets up a test environment.
 
+### Docker build
+
+If you want a reproducible Debian package build environment that compiles against the Debian nginx source package, use the Docker helper script:
+
+```bash
+./scripts/debian-build.sh
+```
+
+This builds a Debian trixie image, downloads the nginx source package inside the container, and exports a `.deb` package artifact to:
+
+```bash
+target/docker/nginx-hibernator-module_<version>-<release>_<arch>.deb
+```
+
 ## Alternatives
 
 - [GoDoxy](https://github.com/yusing/go-proxy): A Go-based proxy with similar features but requires replacing NGINX and only supports Docker.
