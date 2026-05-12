@@ -151,7 +151,7 @@ jobs:
 
       - name: Import APT signing key
         env:
-          GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
         run: |
           test -n "$GPG_PRIVATE_KEY"
           export GNUPGHOME="$RUNNER_TEMP/gnupg"
