@@ -42,11 +42,6 @@ impl SharedStateRef {
         unsafe { self.0.as_ref().state.load(Ordering::Acquire) }
     }
 
-    pub fn store_state(self, value: u8) {
-        unsafe { self.0.as_ref().state.store(value, Ordering::Release) }
-    }
-
-
     pub fn swap_state(self, value: u8) -> u8 {
         unsafe { self.0.as_ref().state.swap(value, Ordering::AcqRel) }
     }

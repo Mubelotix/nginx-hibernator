@@ -79,10 +79,6 @@ impl ServiceRuntime {
     pub fn state(&self) -> ServiceHealthState {
         ServiceHealthState::from_u8(self.shared.load_state())
     }
-    pub fn set_state_without_notify(&self, state: ServiceHealthState) {
-        self.shared.store_state(state.as_u8());
-    }
-
     pub fn set_state(&self, state: ServiceHealthState) -> ServiceHealthState {
         let previous = self.shared.swap_state(state.as_u8());
         if previous != state.as_u8() {
@@ -154,4 +150,3 @@ pub fn get_service_state(service_id: &str) -> ServiceHealthState {
         .map(|runtime| runtime.state())
         .unwrap_or(ServiceHealthState::Unknown)
 }
-

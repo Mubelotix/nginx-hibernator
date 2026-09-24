@@ -51,7 +51,6 @@ use landing::{is_landing_prefixed_uri, serve_landing_page, serve_landing_prefixe
 use service::initiate_service_start;
 
 use crate::check::REGISTERED_MONITORS;
-use crate::service::CONTROLLER_TX;
 
 pub(crate) struct Module;
 
@@ -105,7 +104,6 @@ pub static mut ngx_http_hibernator_module: ngx_module_t = ngx_module_t {
 };
 
 unsafe extern "C" fn hibernator_init_process(_cycle: *mut ngx_cycle_t) -> ngx_int_t {
-    let _ = &CONTROLLER_TX;
     start_registered_service_health_monitors();
     Status::NGX_OK.into()
 }

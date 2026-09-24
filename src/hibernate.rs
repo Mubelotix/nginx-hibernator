@@ -32,7 +32,9 @@ pub(crate) fn spawn_idle_monitor(service_name: String, runtime: Arc<ServiceRunti
                     idle
                 );
                 let stopped = request_service_action(ControllerAction::Stop, &service_name).await;
-                if !stopped {
+                if stopped {
+                    runtime.set_state(ServiceHealthState::Down);
+                } else {
                     elog!("hibernator: failed to stop service {}", service_name);
                 }
             }

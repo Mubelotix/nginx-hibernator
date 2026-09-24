@@ -31,8 +31,7 @@ fn compute_eta(mut values: &[usize], percentile: usize, count: usize) -> Option<
     }
     let mut values = values.to_owned();
     values.sort();
-    let idx = (values.len() * percentile) / 100;
-    values.get(idx).copied()
+    values.get(values.len().saturating_sub(1) * percentile / 100).copied()
 }
 
 impl ServiceHistory {

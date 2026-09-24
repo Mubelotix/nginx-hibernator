@@ -23,7 +23,6 @@ git clone https://github.com/Mubelotix/nginx-hibernator
 cd nginx-hibernator
 
 # Build the module (requires Rust)
-cd module
 cargo build --release
 
 # Build NGINX with the module (requires helper scripts)
@@ -128,7 +127,6 @@ Assets (images, CSS, JS) from the `hibernator_landing_dir` are served under the 
 To run a development environment with a sample service:
 
 ```bash
-cd module
 ./scripts/run.sh start
 ```
 

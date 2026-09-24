@@ -143,10 +143,6 @@ fn send_page_response(
     if header_status != Status::NGX_OK {
         return header_status;
     }
-    if request.header_only() {
-        return Status::NGX_DONE;
-    }
-
     let body_status = unsafe { request.output_filter(&mut *chain) };
     unsafe {
         let request_ptr: *mut ngx_http_request_t = request.into();

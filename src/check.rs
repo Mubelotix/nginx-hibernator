@@ -1,12 +1,13 @@
 use crate::prelude::*;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::Ordering;
+use std::str::from_utf8;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::time::timeout;
 use tokio::net::TcpStream;
+use tokio::time::timeout;
 
 pub static REGISTERED_MONITORS: LazyLock<Mutex<HashMap<String, ServiceMonitorConfig>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -25,6 +26,8 @@ pub struct ServiceMonitorConfig {
     pub history_samples_count: usize,
     pub history_percentile: usize,
 }
+
+static HEALTH_MONITOR_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 
 pub fn ensure_service_health_monitor(
     service_id: &str,
@@ -72,15 +75,22 @@ pub fn ensure_service_health_monitor(
     }
     runtime.fetch_eta();
 
-    if runtime
-        .health_monitor_started
+    // Exit if already started by another thread
+    if HEALTH_MONITOR_TASK_STARTED
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
         .is_err()
     {
         return;
     }
 
-    spawn_future_on_runtime(monitor_service_health(runtime));
+    let runtimes: Vec<Arc<ServiceRuntime>> = {
+        let map = SERVICE_RUNTIMES.lock().expect("service runtime lock poisoned");
+        map.values().cloned().collect()
+    };
+
+    for runtime in runtimes {
+        spawn_future_on_runtime(monitor_service_health(runtime));
+    }
 }
 
 async fn monitor_service_health(runtime: Arc<ServiceRuntime>) {
@@ -94,7 +104,6 @@ async fn monitor_service_health(runtime: Arc<ServiceRuntime>) {
             ServiceHealthState::Unknown => 0,
         };
 
-
         let notified = timeout(
             Duration::from_millis(interval_ms),
             runtime.state_change_notify.notified(),
@@ -106,43 +115,30 @@ async fn monitor_service_health(runtime: Arc<ServiceRuntime>) {
             continue;
         }
 
-        let now = now_ms();
-        let last = runtime.shared.load_last_check_ms();
-        if now < last + interval_ms - 10 {
-            continue;
-        }
-        if !runtime.shared.compare_exchange_last_check_ms(last, now) {
-            continue;
-        }
-
         let is_up = refresh_service_health_async(&runtime).await;
         let next_state = if is_up {
+            if runtime.state() == ServiceHealthState::Starting {
+                let start = runtime.startup_start_time_ms.load(Ordering::Relaxed);
+                if start > 0 {
+                    let duration = now_ms().saturating_sub(start);
+                    if let Some(history_file) = runtime.history_file() {
+                        let rt = Arc::clone(&runtime);
+                        spawn_future_on_runtime(async move {
+                            SERVICE_HISTORY
+                                .put_history(&history_file, duration as usize)
+                                .await;
+                            rt.fetch_eta();
+                        });
+                    }
+                }
+            }
             ServiceHealthState::Up
         } else if runtime.state() == ServiceHealthState::Starting {
             ServiceHealthState::Starting
         } else {
             ServiceHealthState::Down
         };
-
-        let previous_state = ServiceHealthState::from_u8(runtime.shared.swap_state(next_state.as_u8()));
-        if previous_state == ServiceHealthState::Starting && next_state == ServiceHealthState::Up {
-            let start = runtime.shared.load_startup_start_time_ms();
-            let now_ms = now_ms();
-            let now_secs = now_ms / 1000;
-            if start > 0 {
-                let duration = now_ms.saturating_sub(start);
-                if let Some(history_file) = runtime.history_file() {
-                    let rt = Arc::clone(&runtime);
-                    spawn_future_on_runtime(async move {
-                        SERVICE_HISTORY
-                            .put_history(&history_file, duration as usize)
-                            .await;
-                        rt.fetch_eta();
-                    });
-                }
-            }
-            runtime.shared.store_last_activity_secs(now_secs);
-        }
+        runtime.set_state_without_notify(next_state);
     }
 }
 
@@ -255,7 +251,7 @@ async fn is_service_up_http_async(port: u16, endpoint: &str, timeout_ms: u64) ->
         return false;
     }
 
-    let Ok(head) = std::str::from_utf8(&buf[..n]) else {
+    let Ok(head) = from_utf8(&buf[..n]) else {
         return false;
     };
     let Some(first_line) = head.lines().next() else {
@@ -267,14 +263,10 @@ async fn is_service_up_http_async(port: u16, endpoint: &str, timeout_ms: u64) ->
 
 fn is_valid_http_status_line(line: &str) -> bool {
     let mut parts = line.split_whitespace();
-    let Some(http_version) = parts.next() else {
-        return false;
-    };
-    let Some(status) = parts.next() else {
-        return false;
-    };
-
-    (http_version.starts_with("HTTP/1.") || http_version == "HTTP/2")
-        && status.len() == 3
-        && status.chars().all(|c| c.is_ascii_digit())
+    parts
+        .next()
+        .is_some_and(|version| version.starts_with("HTTP/1.") || version == "HTTP/2")
+        && parts.next().is_some_and(|status| {
+            status.len() == 3 && matches!(status.parse(), Ok(200..=299))
+        })
 }

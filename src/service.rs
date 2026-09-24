@@ -1,66 +1,24 @@
 use dbus::nonblock::{Proxy, SyncConnection};
 use dbus_tokio::connection;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{
-    mpsc::{self, UnboundedSender as Sender},
-    oneshot::{channel as oneshot_channel, Sender as OneShotSender},
-};
 use crate::prelude::*;
-
-pub static CONTROLLER_TX: LazyLock<Sender<ControllerCommand>> = LazyLock::new(|| {
-    let (resource, conn) = connection::new_system_sync()
-        .expect("hibernator: failed to connect to D-Bus system bus");
-    let _handle = spawn_future_on_runtime(async move {
-        let err = resource.await;
-        panic!("Lost connection to D-Bus: {}", err);
-    });
-
-    let (tx, mut rx) = mpsc::unbounded_channel::<ControllerCommand>();
-    spawn_future_on_runtime(async move {
-        log!("hibernator: internal controller thread started");
-
-        while let Some(cmd) = rx.recv().await {
-            let conn2 = Arc::clone(&conn);
-            let ok = match cmd.action {
-                ControllerAction::Start => {
-                    run_service_action(ControllerAction::Start, &cmd.service_name, conn2).await
-                }
-                ControllerAction::Stop => {
-                    run_service_action(ControllerAction::Stop, &cmd.service_name, conn2).await
-                }
-            };
-            let _ = cmd.reply_tx.send(ok);
-        }
-    });
-    tx
-});
 
 pub(crate) enum ControllerAction {
     Start,
     Stop,
 }
 
-pub struct ControllerCommand {
-    action: ControllerAction,
-    service_name: String,
-    reply_tx: OneShotSender<bool>,
-}
-
 pub(crate) async fn request_service_action(action: ControllerAction, service_name: &str) -> bool {
-    let (reply_tx, reply_rx) = oneshot_channel();
-    let cmd = ControllerCommand {
-        action,
-        service_name: service_name.to_owned(),
-        reply_tx,
-    };
-
-    if CONTROLLER_TX.send(cmd).is_err() {
-        elog!("hibernator: failed to send command to internal controller");
+    let Ok((resource, conn)) = connection::new_system_sync() else {
+        elog!("hibernator: failed to connect to D-Bus system bus");
         return false;
-    }
-
-    reply_rx.await.unwrap_or(false)
+    };
+    spawn_future_on_runtime(async move {
+        let error = resource.await;
+        elog!("hibernator: lost D-Bus connection: {error}");
+    });
+    run_service_action(action, service_name, conn).await
 }
 
 async fn run_service_action(
@@ -133,6 +91,7 @@ pub fn initiate_service_start(service_name: String) {
         let started = request_service_action(ControllerAction::Start, &service_name).await;
         if !started {
             elog!("hibernator: failed to start service {}", service_name);
+            runtime.set_state(ServiceHealthState::Down);
         }
     });
 }
