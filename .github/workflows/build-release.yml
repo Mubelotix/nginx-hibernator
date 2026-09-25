@@ -126,7 +126,6 @@ jobs:
           files: ${{ steps.pkg.outputs.package }}
           draft: false
           prerelease: false
-          overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
