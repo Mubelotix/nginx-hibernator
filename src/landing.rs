@@ -100,7 +100,7 @@ pub fn is_landing_prefixed_uri(uri: &str) -> bool {
     uri == "/hibernator-landing" || uri.starts_with(LANDING_PREFIX)
 }
 
-fn send_page_response(
+pub(crate) fn send_page_response(
     request: &mut Request,
     body: &[u8],
     content_type: &str,
@@ -156,7 +156,7 @@ fn send_page_response(
     }
 }
 
-async fn read_landing_asset_by_rel_path_async(
+pub(crate) async fn read_landing_asset_by_rel_path_async(
     landing_dir: &str,
     rel_path: &str,
 ) -> Option<(Vec<u8>, &'static str)> {

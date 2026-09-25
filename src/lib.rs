@@ -32,6 +32,7 @@ macro_rules! elog {
 }
 
 mod check;
+mod checkpoint;
 mod config;
 mod hibernate;
 mod history;
@@ -44,7 +45,8 @@ mod nginx_async;
 use check::{
     ensure_service_health_monitor, start_registered_service_health_monitors,
 };
-use state::{ensure_shared_state_zone, is_service_up};
+use checkpoint::{serve_checkpoint_page, should_serve_checkpoint};
+use state::{ensure_shared_state_zone, get_service_state, is_service_up};
 use config::{ModuleConfig, NGX_HTTP_HIBERNATOR_COMMANDS};
 use hibernate::touch_activity;
 use landing::{is_landing_prefixed_uri, serve_landing_page, serve_landing_prefixed_asset};
@@ -126,10 +128,6 @@ impl HibernatorRequestHandler {
             }
         }
 
-        if let Some(service_name) = conf.service_name.as_deref() {
-            touch_activity(service_name, conf.keep_alive_secs);
-        }
-
         let health_service_id = conf.service_name.clone().unwrap_or_else(|| {
             format!("{}:{}", conf.target_port.unwrap_or(0), conf.check_endpoint)
         });
@@ -175,24 +173,36 @@ impl HibernatorRequestHandler {
             is_up
         );
 
-        if !is_up {
+        if is_up {
             if let Some(service_name) = conf.service_name.as_deref() {
-                initiate_service_start(service_name.to_owned());
-                ngx_log_debug_http!(
-                    request,
-                    "hibernator start scheduled service={}",
-                    service_name
-                );
+                touch_activity(service_name, conf.keep_alive_secs);
             }
-            serve_landing_page(
-                request,
-                &conf.landing_dir,
-                &health_service_id,
-                conf.keep_alive_secs,
-            )
-        } else {
-            Status::NGX_DECLINED
+            return Status::NGX_DECLINED;
         }
+
+        if should_serve_checkpoint(
+            conf.checkpoint_enabled.unwrap_or(false),
+            get_service_state(&health_service_id),
+            request.method(),
+        ) {
+            return serve_checkpoint_page(request, &conf.landing_dir);
+        }
+
+        if let Some(service_name) = conf.service_name.as_deref() {
+            touch_activity(service_name, conf.keep_alive_secs);
+            initiate_service_start(service_name.to_owned());
+            ngx_log_debug_http!(
+                request,
+                "hibernator start scheduled service={}",
+                service_name
+            );
+        }
+        serve_landing_page(
+            request,
+            &conf.landing_dir,
+            &health_service_id,
+            conf.keep_alive_secs,
+        )
     }
 }
 

@@ -30,6 +30,7 @@ pub struct ModuleConfig {
     pub starting_check_interval_ms: u64,
     pub down_check_interval_ms: u64,
     pub landing_dir: String,
+    pub checkpoint_enabled: Option<bool>,
     pub eta_enabled: Option<bool>,
     pub history_file: Option<String>,
     pub history_samples_count: usize,
@@ -52,6 +53,7 @@ impl Default for ModuleConfig {
             starting_check_interval_ms: 100,
             down_check_interval_ms: 60_000,
             landing_dir: DEFAULT_LANDING_DIR.to_owned(),
+            checkpoint_enabled: None,
             eta_enabled: None,
             history_file: None,
             history_samples_count: 40,
@@ -105,6 +107,9 @@ impl http::Merge for ModuleConfig {
         if self.landing_dir == defaults.landing_dir {
             self.landing_dir = prev.landing_dir.clone();
         }
+        if self.checkpoint_enabled.is_none() {
+            self.checkpoint_enabled = prev.checkpoint_enabled;
+        }
         if self.eta_enabled.is_none() {
             self.eta_enabled = prev.eta_enabled;
         }
@@ -152,7 +157,7 @@ impl http::Merge for ModuleConfig {
     }
 }
 
-pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 18] = [
+pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 19] = [
     ngx_command_t {
         name: ngx_string!("hibernator"),
         type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
@@ -253,6 +258,14 @@ pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 18] = [
         name: ngx_string!("hibernator_landing_dir"),
         type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
         set: Some(set_landing_dir),
+        conf: NGX_HTTP_LOC_CONF_OFFSET,
+        offset: 0,
+        post: core::ptr::null_mut(),
+    },
+    ngx_command_t {
+        name: ngx_string!("hibernator_checkpoint"),
+        type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+        set: Some(set_checkpoint_enable),
         conf: NGX_HTTP_LOC_CONF_OFFSET,
         offset: 0,
         post: core::ptr::null_mut(),
@@ -389,6 +402,25 @@ extern "C" fn set_enable(
     let conf = unsafe { &mut *(conf as *mut ModuleConfig) };
     if let Some(enable) = parse_on_off(&val) {
         conf.enable = enable;
+        ngx::core::NGX_CONF_OK
+    } else {
+        ngx_conf_log_error!(NGX_LOG_EMERG, cf, "invalid value: use `on` or `off`");
+        ngx::core::NGX_CONF_ERROR
+    }
+}
+
+extern "C" fn set_checkpoint_enable(
+    cf: *mut ngx_conf_t,
+    _cmd: *mut ngx_command_t,
+    conf: *mut c_void,
+) -> *mut c_char {
+    let Ok(val) = arg1(cf) else {
+        return ngx::core::NGX_CONF_ERROR;
+    };
+
+    let conf = unsafe { &mut *(conf as *mut ModuleConfig) };
+    if let Some(enabled) = parse_on_off(&val) {
+        conf.checkpoint_enabled = Some(enabled);
         ngx::core::NGX_CONF_OK
     } else {
         ngx_conf_log_error!(NGX_LOG_EMERG, cf, "invalid value: use `on` or `off`");

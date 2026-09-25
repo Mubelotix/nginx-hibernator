@@ -22,6 +22,7 @@ These can be used in your HTML or JavaScript to show progress bars or countdowns
 ## Folder Layout
 
 - `index.html` - Primary page returned while the service is starting.
+- `checkpoint.html` - Optional interaction page returned before startup when `hibernator_checkpoint on` is configured.
 - `assets/`, `style.css`, etc. - Static assets used by the page.
 
 ## Configuration
@@ -39,6 +40,14 @@ location / {
 ```
 
 If `hibernator_landing_dir` is not set, the module uses `/usr/share/nginx-hibernator/landing/`.
+
+Enable the optional checkpoint page with:
+
+```nginx
+hibernator_checkpoint on;
+```
+
+The bundled `checkpoint.html` sends a `POST` to the current URL after a visitor interacts with the page. Custom checkpoint pages must do the same to enter the normal startup flow.
 
 ## Authoring Notes
 

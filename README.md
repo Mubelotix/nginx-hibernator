@@ -57,7 +57,7 @@ http {
       hibernator_check_mode http;
 
       # HTTP endpoint used for readiness checks (only if mode is http).
-      # Default: /ready
+      # Default: /ready. Any valid HTTP response means the upstream is reachable.
       hibernator_check_endpoint /ready;
 
       # Max time allowed for a single readiness check.
@@ -84,6 +84,10 @@ http {
       # Folder containing landing page files (index.html + assets).
       # Default: /usr/share/nginx-hibernator/landing
       hibernator_landing_dir /var/www/landing;
+
+      # Require an interaction before a down service is started.
+      # Default: off
+      hibernator_checkpoint on;
 
       # --- Startup ETA Options ---
 
@@ -121,6 +125,12 @@ The following placeholders are automatically replaced in the HTML:
 - `KEEP_ALIVE`: The configured keep-alive duration in seconds.
 
 Assets (images, CSS, JS) from the `hibernator_landing_dir` are served under the `/hibernator-landing/` URI prefix.
+
+### Checkpoint Page
+
+Set `hibernator_checkpoint on;` to return `checkpoint.html` from the landing directory before starting a down service. The bundled page displays an `Enter Site` control and sends a JavaScript confirmation request when that control is clicked. That confirmation follows the normal startup and landing-page path. Automated `GET` requests remain on the checkpoint page and do not start the service.
+
+Custom landing directories need both `index.html` and `checkpoint.html` when this option is enabled.
 
 ## Development
 

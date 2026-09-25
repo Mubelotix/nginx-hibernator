@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use crate::state::SERVICE_RUNTIMES;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::str::from_utf8;
@@ -118,7 +119,7 @@ async fn monitor_service_health(runtime: Arc<ServiceRuntime>) {
         let is_up = refresh_service_health_async(&runtime).await;
         let next_state = if is_up {
             if runtime.state() == ServiceHealthState::Starting {
-                let start = runtime.startup_start_time_ms.load(Ordering::Relaxed);
+                let start = runtime.shared.load_startup_start_time_ms();
                 if start > 0 {
                     let duration = now_ms().saturating_sub(start);
                     if let Some(history_file) = runtime.history_file() {
@@ -138,7 +139,7 @@ async fn monitor_service_health(runtime: Arc<ServiceRuntime>) {
         } else {
             ServiceHealthState::Down
         };
-        runtime.set_state_without_notify(next_state);
+        runtime.set_state(next_state);
     }
 }
 
@@ -266,7 +267,7 @@ fn is_valid_http_status_line(line: &str) -> bool {
     parts
         .next()
         .is_some_and(|version| version.starts_with("HTTP/1.") || version == "HTTP/2")
-        && parts.next().is_some_and(|status| {
-            status.len() == 3 && matches!(status.parse(), Ok(200..=299))
-        })
+        && parts
+            .next()
+            .is_some_and(|status| status.len() == 3 && status.bytes().all(|byte| byte.is_ascii_digit()))
 }

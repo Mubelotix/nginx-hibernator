@@ -35,36 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /opt/test-service && cat > /opt/test-service/server.py <<'PYEOF'
-#!/usr/bin/env python3
-import http.server
-import socketserver
-import time
-import sys
-
-PORT = 18081
-
-class ReadyHandler(http.server.SimpleHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == '/ready':
-            self.send_response(200)
-            self.send_header('Content-type', 'text/plain')
-            self.end_headers()
-            self.wfile.write(b'OK')
-        else:
-            self.send_response(200)
-            self.send_header('Content-type', 'text/plain')
-            self.end_headers()
-            self.wfile.write(b'Hello from test service')
-    
-    def log_message(self, format, *args):
-        sys.stderr.write(f"[test-service] {format % args}\n")
-
-with socketserver.TCPServer(("", PORT), ReadyHandler) as httpd:
-    print(f"Test service listening on port {PORT}")
-    sys.stderr.flush()
-    httpd.serve_forever()
-PYEOF
+COPY tests/test-service.py /opt/test-service/server.py
 RUN chmod +x /opt/test-service/server.py
 TESTEOF
 
@@ -124,10 +95,11 @@ http {
       hibernator_service_name test-service;
       hibernator_check_port 18081;
       hibernator_check_mode http;
-      hibernator_check_endpoint /ready;
       hibernator_check_timeout 100ms;
+      hibernator_down_check_interval 100ms;
       hibernator_keep_alive 30s;
       hibernator_start_timeout 30s;
+      hibernator_checkpoint on;
 
       proxy_pass http://test_backend;
     }
@@ -142,29 +114,40 @@ docker exec -d "$TEST_CONTAINER" sh -c 'nginx -g "daemon off;" &'
 # Wait for nginx to start
 sleep 3
 
-log "test 1: first request should get landing page (503) - service not yet started"
+log "test 1: first request should get checkpoint page (503) without starting the service"
 http_code=$(docker exec "$TEST_CONTAINER" curl -s -o /tmp/response.html -w '%{http_code}' http://localhost:80/ 2>&1 || echo "FAIL")
 
 if [[ "$http_code" == "503" ]]; then
   log "✓ Got 503 response as expected"
   body=$(docker exec "$TEST_CONTAINER" cat /tmp/response.html)
-  if echo "$body" | grep -q "hibernator\|landing\|ETA\|DURATION\|Service Unavailable" 2>/dev/null; then
-    log "✓ Response contains landing page content"
+  if echo "$body" | grep -q "Enter Site"; then
+    log "✓ Response contains checkpoint page content"
   else
-    log "⚠ Response content (first 300 chars):"
-    echo "$body" | head -c 300
+    log "✗ Response does not contain checkpoint page content"
+    exit 1
   fi
 else
-  log "⚠ Got $http_code instead of 503 (service may have started quickly)"
+  log "✗ Expected 503, got $http_code"
+  exit 1
+fi
+
+log "test 2: confirmation request should get landing page and start the service"
+http_code=$(docker exec "$TEST_CONTAINER" curl -s -X POST -o /tmp/response.html -w '%{http_code}' http://localhost:80/ 2>&1 || echo "FAIL")
+
+if [[ "$http_code" == "503" ]] && docker exec "$TEST_CONTAINER" grep -q "Server is Waking Up" /tmp/response.html; then
+  log "✓ Confirmation received the landing page"
+else
+  log "✗ Confirmation did not receive the landing page"
+  exit 1
 fi
 
 log "starting the test service in background now"
 docker exec -d "$TEST_CONTAINER" /opt/test-service/server.py
 
-log "test 2: waiting for service to start (5 seconds)"
+log "test 3: waiting for service to start (5 seconds)"
 sleep 5
 
-log "test 3: second request should reach actual service"
+log "test 4: second request should reach actual service"
 http_code=$(docker exec "$TEST_CONTAINER" curl -s -o /tmp/response2.html -w '%{http_code}' http://localhost:80/ 2>&1 || echo "FAIL")
 
 if [[ "$http_code" == "200" ]]; then

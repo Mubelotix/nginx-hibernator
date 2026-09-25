@@ -4,4 +4,6 @@ target
 module
 ngx-rust
 tests
+!tests/
+!tests/test-service.py
 **/*.log
