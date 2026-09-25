@@ -132,6 +132,16 @@ Set `hibernator_checkpoint on;` to return `checkpoint.html` from the landing dir
 
 Custom landing directories need both `index.html` and `checkpoint.html` when this option is enabled.
 
+Use `hibernator_checkpoint_bypass` to let matching requests start a down service without the checkpoint. Each directive is one rule; all its header conditions must match, and any matching rule is sufficient. A header name alone checks for presence. Value conditions support `starts_with=`, `contains=`, and `ends_with=`. For example:
+
+```nginx
+hibernator_checkpoint on;
+hibernator_checkpoint_bypass X-Preview;
+hibernator_checkpoint_bypass "X-Environment starts_with=trusted-" "X-Request contains=automation";
+```
+
+These rules are only allowed when checkpointing is enabled. Header names match case-insensitively; header values match case-sensitively.
+
 ## Development
 
 To run a development environment with a sample service:

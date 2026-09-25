@@ -49,6 +49,18 @@ hibernator_checkpoint on;
 
 The bundled `checkpoint.html` sends a `POST` to the current URL after a visitor interacts with the page. Custom checkpoint pages must do the same to enter the normal startup flow.
 
+Checkpoint bypass rules can let selected requests start the service without showing the checkpoint. They are valid only in a configuration where `hibernator_checkpoint on;` is enabled. Each `hibernator_checkpoint_bypass` directive defines one rule: every condition on that line must match, while matching any one directive is enough to bypass the checkpoint. A bare header condition matches when the request contains that header. Add `starts_with=`, `contains=`, or `ends_with=` after the header name to match its value:
+
+```nginx
+hibernator_checkpoint on;
+
+# Either rule can bypass the checkpoint.
+hibernator_checkpoint_bypass X-Preview;
+hibernator_checkpoint_bypass "X-Environment starts_with=trusted-" "X-Request contains=automation";
+```
+
+Header names are matched case-insensitively; matched values are case-sensitive. Quote a whole condition when its value contains spaces.
+
 ## Authoring Notes
 
 - Keep all landing assets in the same directory (or subdirectories) so they can be served under `/hibernator-landing/`.

@@ -45,7 +45,9 @@ mod nginx_async;
 use check::{
     ensure_service_health_monitor, start_registered_service_health_monitors,
 };
-use checkpoint::{serve_checkpoint_page, should_serve_checkpoint};
+use checkpoint::{
+    checkpoint_bypass_matches, serve_checkpoint_page, should_serve_checkpoint,
+};
 use state::{ensure_shared_state_zone, get_service_state, is_service_up};
 use config::{ModuleConfig, NGX_HTTP_HIBERNATOR_COMMANDS};
 use hibernate::touch_activity;
@@ -184,6 +186,9 @@ impl HibernatorRequestHandler {
             conf.checkpoint_enabled.unwrap_or(false),
             get_service_state(&health_service_id),
             request.method(),
+        ) && !checkpoint_bypass_matches(
+            conf.checkpoint_bypass_rules.as_deref().unwrap_or(&[]),
+            request,
         ) {
             return serve_checkpoint_page(request, &conf.landing_dir);
         }
