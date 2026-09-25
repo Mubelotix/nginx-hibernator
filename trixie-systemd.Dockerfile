@@ -11,7 +11,7 @@ ENV container=docker
 ENV LC_ALL=C.UTF-8
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install systemd and essential communication tools
+# Install systemd plus the Nginx and Python runtime used by scripts/run-container.sh.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     systemd \
@@ -19,6 +19,8 @@ RUN apt-get update && \
     dbus \
     dbus-user-session \
     iproute2 \
+    nginx \
+    python3 \
     procps \
     curl \
     && apt-get clean \
