@@ -352,7 +352,7 @@ dependencies = [
 
 [[package]]
 name = "nginx-hibernator"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "dbus",
  "dbus-tokio",
