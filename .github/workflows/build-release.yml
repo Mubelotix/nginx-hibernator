@@ -10,6 +10,7 @@ on:
   push:
     paths:
       - Cargo.toml
+      - Cargo.lock
   workflow_dispatch:
     inputs:
       force_release:
