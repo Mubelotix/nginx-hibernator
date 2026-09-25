@@ -34,11 +34,6 @@ jobs:
           HIBERNATOR_VERSION="$(awk -F'"' '/^version\s*=\s*"/ {print $2; exit}' Cargo.toml)"
           test -n "$HIBERNATOR_VERSION"
 
-          NGINX_VERSION=$(apt-cache policy nginx 2>/dev/null | grep Candidate | awk '{print $2}' || curl -s https://packages.debian.org/trixie/nginx | grep -oP 'nginx/\K[0-9.]+' | head -1)
-          if [ -z "$NGINX_VERSION" ]; then
-            NGINX_VERSION=$(curl -s https://packages.debian.org/trixie/nginx | grep -oP 'nginx/\K[0-9.]+' | head -1)
-          fi
-
           RELEASE_TAG="v${HIBERNATOR_VERSION}"
           FORCE_RELEASE="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force_release == 'true' }}"
           SHOULD_RELEASE=true
@@ -47,7 +42,6 @@ jobs:
           fi
 
           echo "hibernator_version=$HIBERNATOR_VERSION" >> "$GITHUB_OUTPUT"
-          echo "nginx_version=$NGINX_VERSION" >> "$GITHUB_OUTPUT"
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "should_release=$SHOULD_RELEASE" >> "$GITHUB_OUTPUT"
 
@@ -60,10 +54,16 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build Debian package
+        id: build_package
         if: steps.versions.outputs.should_release == 'true'
         run: |
           ./scripts/debian-build.sh
           ls -lh target/docker/
+          PACKAGE="$(find target/docker -maxdepth 1 -type f -name '*.deb' -print -quit)"
+          test -n "$PACKAGE"
+          NGINX_PACKAGE_VERSION="$(dpkg-deb -f "$PACKAGE" X-Built-Against-Nginx)"
+          test -n "$NGINX_PACKAGE_VERSION"
+          echo "nginx_package_version=$NGINX_PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Test package
         if: steps.versions.outputs.should_release == 'true'
@@ -101,7 +101,7 @@ jobs:
           tag_name: ${{ steps.versions.outputs.release_tag }}
           name: v${{ steps.versions.outputs.hibernator_version }}
           body: |
-            Built against nginx ${{ steps.versions.outputs.nginx_version }} from Debian trixie
+            Built against Debian trixie nginx package ${{ steps.build_package.outputs.nginx_package_version }}
             
             ## Installation
             
@@ -125,6 +125,7 @@ jobs:
           files: ${{ steps.pkg.outputs.package }}
           draft: false
           prerelease: false
+          overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

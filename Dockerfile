@@ -27,12 +27,13 @@ RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.s
         libdbus-1-dev \
         rustup \
         nginx \
-    && apt-get build-dep -y nginx \
+    && NGINX_PACKAGE_VERSION="$(dpkg-query -W -f='${Version}' nginx)" \
+    && apt-get build-dep -y "nginx=$NGINX_PACKAGE_VERSION" \
     && rustup toolchain install stable --profile minimal \
     && rustup default stable \
     && mkdir -p /tmp/nginx-src \
     && cd /tmp/nginx-src \
-    && apt-get source nginx \
+    && apt-get source "nginx=$NGINX_PACKAGE_VERSION" \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -75,9 +76,12 @@ RUN mkdir -p /tmp/pkg/DEBIAN \
 
 # Build the deb package
 RUN ARCH="$(dpkg --print-architecture)" \
+    && NGINX_PACKAGE_VERSION="$(dpkg-query -W -f='${Version}' nginx)" \
+    && NGINX_ABI="$(dpkg-query -W -f='${Provides}' nginx | tr ', ' '\n' | awk '/^nginx-abi-/ {print; exit}')" \
+    && test -n "$NGINX_ABI" \
     && INSTALLED_SIZE="$(du -sk /tmp/pkg/usr /tmp/pkg/etc /tmp/pkg/var | awk '{sum += $1} END {print sum}')" \
-    && printf 'Package: %s\nVersion: %s-%s\nSection: web\nPriority: optional\nArchitecture: %s\nDepends: nginx, libdbus-1-3\nMaintainer: %s\nInstalled-Size: %s\nDescription: %s\n' \
-        "${DEB_PACKAGE_NAME}" "${DEB_PACKAGE_VERSION}" "${DEB_PACKAGE_RELEASE}" "${ARCH}" "${DEB_MAINTAINER}" "${INSTALLED_SIZE}" "${DEB_DESCRIPTION}" \
+    && printf 'Package: %s\nVersion: %s-%s\nSection: web\nPriority: optional\nArchitecture: %s\nDepends: %s, nginx, libdbus-1-3\nX-Built-Against-Nginx: %s\nX-Built-Against-Nginx-ABI: %s\nMaintainer: %s\nInstalled-Size: %s\nDescription: %s\n' \
+        "${DEB_PACKAGE_NAME}" "${DEB_PACKAGE_VERSION}" "${DEB_PACKAGE_RELEASE}" "${ARCH}" "${NGINX_ABI}" "${NGINX_PACKAGE_VERSION}" "${NGINX_ABI}" "${DEB_MAINTAINER}" "${INSTALLED_SIZE}" "${DEB_DESCRIPTION}" \
         > /tmp/pkg/DEBIAN/control \
     && chmod 0644 /tmp/pkg/DEBIAN/control \
     && dpkg-deb --build --root-owner-group /tmp/pkg \
