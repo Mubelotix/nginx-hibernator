@@ -9,7 +9,9 @@
             margin: 0;
             min-height: 100vh;
             display: grid;
+            align-content: center;
             place-items: center;
+            gap: 1.25rem;
             padding: 1.5rem;
             box-sizing: border-box;
             background: #101448;
@@ -26,6 +28,12 @@
             font-weight: 600;
             user-select: none;
         }
+        p {
+            width: 100%;
+            margin: 0;
+            text-align: center;
+            line-height: 1.5;
+        }
         @media (hover: hover) {
             div:hover {
                 background: rgba(255, 255, 255, 0.25);
@@ -35,6 +43,7 @@
     </style>
 </head>
 <body>
+    <p>Because this site gets a lot of bot traffic, it only starts when you click the Enter Site button.</p>
     <div>Enter Site</div>
     <script>
         (() => {
