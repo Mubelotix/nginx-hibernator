@@ -1,8 +1,12 @@
+use crate::prelude::*;
 use dbus::nonblock::{Proxy, SyncConnection};
 use dbus_tokio::connection;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
-use crate::prelude::*;
+use tokio::sync::Mutex;
+
+static SYSTEM_BUS_CONNECTION: LazyLock<Mutex<Option<Arc<SyncConnection>>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 pub(crate) enum ControllerAction {
     Start,
@@ -10,15 +14,48 @@ pub(crate) enum ControllerAction {
 }
 
 pub(crate) async fn request_service_action(action: ControllerAction, service_name: &str) -> bool {
-    let Ok((resource, conn)) = connection::new_system_sync() else {
-        elog!("hibernator: failed to connect to D-Bus system bus");
+    let Some(conn) = system_bus_connection().await else {
         return false;
     };
-    spawn_future_on_runtime(async move {
+
+    run_service_action(action, service_name, conn).await
+}
+
+async fn system_bus_connection() -> Option<Arc<SyncConnection>> {
+    let mut cached = SYSTEM_BUS_CONNECTION.lock().await;
+    if let Some(conn) = cached.as_ref() {
+        return Some(Arc::clone(conn));
+    }
+
+    let (resource, conn) = match connection::new_system_sync() {
+        Ok(connection) => connection,
+        Err(error) => {
+            elog!("hibernator: failed to connect to D-Bus system bus: {error}");
+            return None;
+        }
+    };
+
+    let resource_conn = Arc::clone(&conn);
+    *cached = Some(Arc::clone(&conn));
+    if spawn_future_on_runtime(async move {
         let error = resource.await;
         elog!("hibernator: lost D-Bus connection: {error}");
-    });
-    run_service_action(action, service_name, conn).await
+        let mut cached = SYSTEM_BUS_CONNECTION.lock().await;
+        if cached
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &resource_conn))
+        {
+            *cached = None;
+        }
+    })
+    .is_none()
+    {
+        *cached = None;
+        elog!("hibernator: failed to monitor D-Bus system bus connection");
+        return None;
+    }
+
+    Some(conn)
 }
 
 async fn run_service_action(
