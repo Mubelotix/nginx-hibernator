@@ -41,6 +41,7 @@ mod prelude;
 mod runtime;
 mod service;
 mod state;
+mod status;
 mod nginx_async;
 use check::{
     ensure_service_health_monitor, start_registered_service_health_monitors,
@@ -53,6 +54,7 @@ use config::{ModuleConfig, NGX_HTTP_HIBERNATOR_COMMANDS};
 use hibernate::touch_activity;
 use landing::{is_landing_prefixed_uri, serve_landing_page, serve_landing_prefixed_asset};
 use service::initiate_service_start;
+use prelude::*;
 
 use crate::check::REGISTERED_MONITORS;
 
@@ -124,15 +126,19 @@ impl HibernatorRequestHandler {
             return Status::NGX_DECLINED;
         }
 
-        if let Ok(uri) = request.path().to_str() {
-            if is_landing_prefixed_uri(uri) {
-                return serve_landing_prefixed_asset(request, &conf.landing_dir);
-            }
-        }
-
         let health_service_id = conf.service_name.clone().unwrap_or_else(|| {
             format!("{}:{}", conf.target_port.unwrap_or(0), conf.check_endpoint)
         });
+
+        if request.path().to_str().ok()
+            == Some(conf.status_path.as_deref().unwrap_or("/hibernator-status"))
+        {
+            return serve_status(request, &health_service_id, conf.eta_enabled.unwrap_or(true));
+        }
+
+        if request.path().to_str().is_ok_and(is_landing_prefixed_uri) {
+            return serve_landing_prefixed_asset(request, &conf.landing_dir);
+        }
 
         let Some(target_port) = conf.target_port else {
             ngx_log_debug_http!(

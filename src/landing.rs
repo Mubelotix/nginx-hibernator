@@ -132,7 +132,11 @@ pub(crate) fn send_page_response(
     if header_status != Status::NGX_OK {
         return header_status;
     }
-    let body_status = unsafe { request.output_filter(&mut *chain) };
+    let body_status = if request.header_only() {
+        Status::NGX_OK
+    } else {
+        unsafe { request.output_filter(&mut *chain) }
+    };
     unsafe {
         let request_ptr: *mut ngx_http_request_t = request.into();
         ngx_http_finalize_request(request_ptr, body_status.0);

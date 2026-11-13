@@ -85,6 +85,10 @@ http {
       # Default: /usr/share/nginx-hibernator/landing
       hibernator_landing_dir /var/www/landing;
 
+      # Status JSON path (must fall within this location).
+      # Default: /hibernator-status
+      hibernator_status_path /hibernator-status;
+
       # Require an interaction before a down service is started.
       # Default: off
       hibernator_checkpoint on;
@@ -113,6 +117,10 @@ http {
   }
 }
 ```
+
+## Status Endpoint
+
+`/hibernator-status` returns HTTP `200` with JSON such as `{"status":"up","eta_seconds":0}`. Status is the cached readiness state: `unknown`, `down`, `starting`, or `up`. `eta_seconds` is the estimated remaining startup time rounded up, `0` when up, or `null` when unavailable. Polling never starts the service or extends its idle timeout.
 
 ## Landing Page
 

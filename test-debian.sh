@@ -97,6 +97,7 @@ http {
 
     location /one/ {
       hibernator on;
+      hibernator_status_path /one/status;
       hibernator_service_name test-service-one;
       hibernator_check_port 18081;
       hibernator_check_mode http;
@@ -111,6 +112,7 @@ http {
 
     location /two/ {
       hibernator on;
+      hibernator_status_path /two/status;
       hibernator_service_name test-service-two;
       hibernator_check_port 18082;
       hibernator_check_mode http;
@@ -132,6 +134,33 @@ log "starting nginx"
 
 # Wait for nginx to start
 sleep 3
+
+assert_status() {
+  local path="$1" expected="$2"
+  "$CONTAINER_CLI" exec "$TEST_CONTAINER" sh -ec '
+    test "$(curl -s -D /tmp/status-headers -o /tmp/status.json -w "%{http_code}" "http://localhost$1")" = 200
+    grep -qi "^Content-Type: application/json" /tmp/status-headers
+    grep -qi "^Cache-Control: no-store" /tmp/status-headers
+    python3 -c "import json,sys; assert json.load(open(\"/tmp/status.json\")) == {\"status\":sys.argv[1],\"eta_seconds\":0 if sys.argv[1] == \"up\" else None}" "$2"
+  ' sh "$path" "$expected"
+}
+
+log "status polling returns down without triggering startup"
+assert_status /one/status down
+assert_status '/one/status?poll=1' down
+assert_status /two/status down
+
+"$CONTAINER_CLI" exec "$TEST_CONTAINER" python3 -c '
+import http.client, json
+conn = http.client.HTTPConnection("localhost")
+for method in ["HEAD", "GET", "HEAD", "GET"]:
+    conn.request(method, "/one/status")
+    response = conn.getresponse()
+    body = response.read()
+    assert response.status == 200
+    assert body == b"" if method == "HEAD" else json.loads(body)["status"] == "down"
+conn.close()
+'
 
 log "test 1: first request should get checkpoint page (503) without starting the service"
 http_code=$("$CONTAINER_CLI" exec "$TEST_CONTAINER" curl -s -o /tmp/response.html -w '%{http_code}' http://localhost:80/one/ 2>&1 || echo "FAIL")
@@ -186,6 +215,8 @@ log "test 5: waiting for services to start (5 seconds)"
 sleep 5
 
 log "test 6: both requests should reach their actual services"
+assert_status /one/status up
+assert_status /two/status up
 http_code=$("$CONTAINER_CLI" exec "$TEST_CONTAINER" curl -s -o /tmp/response1.html -w '%{http_code}' http://localhost:80/one/ 2>&1 || echo "FAIL")
 
 if [[ "$http_code" == "200" ]]; then

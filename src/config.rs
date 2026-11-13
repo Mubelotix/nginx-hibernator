@@ -1,5 +1,6 @@
 use crate::check::{ServiceMonitorConfig, REGISTERED_MONITORS};
 use crate::landing::DEFAULT_LANDING_DIR;
+use ngx::core::{NGX_CONF_ERROR, NGX_CONF_OK};
 use core::ffi::{c_char, c_void};
 use ngx::ffi::{
     ngx_command_t, ngx_conf_t, ngx_str_t, ngx_uint_t, NGX_CONF_1MORE, NGX_CONF_TAKE1,
@@ -43,6 +44,7 @@ pub struct ModuleConfig {
     pub starting_check_interval_ms: u64,
     pub down_check_interval_ms: u64,
     pub landing_dir: String,
+    pub status_path: Option<String>,
     pub checkpoint_enabled: Option<bool>,
     pub checkpoint_bypass_rules: Option<Vec<Vec<CheckpointHeaderCondition>>>,
     pub eta_enabled: Option<bool>,
@@ -67,6 +69,7 @@ impl Default for ModuleConfig {
             starting_check_interval_ms: 100,
             down_check_interval_ms: 60_000,
             landing_dir: DEFAULT_LANDING_DIR.to_owned(),
+            status_path: None,
             checkpoint_enabled: None,
             checkpoint_bypass_rules: None,
             eta_enabled: None,
@@ -122,6 +125,9 @@ impl http::Merge for ModuleConfig {
         }
         if self.landing_dir == defaults.landing_dir {
             self.landing_dir = prev.landing_dir.clone();
+        }
+        if self.status_path.is_none() {
+            self.status_path = prev.status_path.clone();
         }
         if self.checkpoint_enabled.is_none() {
             self.checkpoint_enabled = prev.checkpoint_enabled;
@@ -179,7 +185,15 @@ impl http::Merge for ModuleConfig {
     }
 }
 
-pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 20] = [
+pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 21] = [
+    ngx_command_t {
+        name: ngx_string!("hibernator_status_path"),
+        type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+        set: Some(set_status_path),
+        conf: NGX_HTTP_LOC_CONF_OFFSET,
+        offset: 0,
+        post: core::ptr::null_mut(),
+    },
     ngx_command_t {
         name: ngx_string!("hibernator"),
         type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
@@ -207,7 +221,7 @@ pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 20] = [
     ngx_command_t {
         name: ngx_string!("hibernator_keep_alive"),
         type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
-        set: Some(set_keep_alive),
+        set: Some(set_duration),
         conf: NGX_HTTP_LOC_CONF_OFFSET,
         offset: 0,
         post: core::ptr::null_mut(),
@@ -215,7 +229,7 @@ pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 20] = [
     ngx_command_t {
         name: ngx_string!("hibernator_start_timeout"),
         type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
-        set: Some(set_start_timeout),
+        set: Some(set_duration),
         conf: NGX_HTTP_LOC_CONF_OFFSET,
         offset: 0,
         post: core::ptr::null_mut(),
@@ -223,7 +237,7 @@ pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 20] = [
     ngx_command_t {
         name: ngx_string!("hibernator_start_check_interval"),
         type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
-        set: Some(set_start_check_interval),
+        set: Some(set_duration),
         conf: NGX_HTTP_LOC_CONF_OFFSET,
         offset: 0,
         post: core::ptr::null_mut(),
@@ -247,7 +261,7 @@ pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 20] = [
     ngx_command_t {
         name: ngx_string!("hibernator_check_timeout"),
         type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
-        set: Some(set_check_timeout),
+        set: Some(set_duration),
         conf: NGX_HTTP_LOC_CONF_OFFSET,
         offset: 0,
         post: core::ptr::null_mut(),
@@ -255,7 +269,7 @@ pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 20] = [
     ngx_command_t {
         name: ngx_string!("hibernator_up_check_interval"),
         type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
-        set: Some(set_up_check_interval),
+        set: Some(set_duration),
         conf: NGX_HTTP_LOC_CONF_OFFSET,
         offset: 0,
         post: core::ptr::null_mut(),
@@ -263,7 +277,7 @@ pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 20] = [
     ngx_command_t {
         name: ngx_string!("hibernator_starting_check_interval"),
         type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
-        set: Some(set_starting_check_interval),
+        set: Some(set_duration),
         conf: NGX_HTTP_LOC_CONF_OFFSET,
         offset: 0,
         post: core::ptr::null_mut(),
@@ -271,7 +285,7 @@ pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 20] = [
     ngx_command_t {
         name: ngx_string!("hibernator_down_check_interval"),
         type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
-        set: Some(set_down_check_interval),
+        set: Some(set_duration),
         conf: NGX_HTTP_LOC_CONF_OFFSET,
         offset: 0,
         post: core::ptr::null_mut(),
@@ -334,6 +348,23 @@ pub static mut NGX_HTTP_HIBERNATOR_COMMANDS: [ngx_command_t; 20] = [
     },
     ngx_command_t::empty(),
 ];
+
+extern "C" fn set_status_path(
+    cf: *mut ngx_conf_t,
+    _cmd: *mut ngx_command_t,
+    conf: *mut c_void,
+) -> *mut c_char {
+    let Ok(val) = arg1(cf) else {
+        return NGX_CONF_ERROR;
+    };
+    if !val.starts_with('/') || val.contains(['?', '#']) || val.chars().any(char::is_whitespace) {
+        ngx_conf_log_error!(NGX_LOG_EMERG, cf, "status path must be an absolute URI path without query or fragment");
+        return NGX_CONF_ERROR;
+    }
+    let conf = unsafe { &mut *(conf as *mut ModuleConfig) };
+    conf.status_path = Some(val);
+    NGX_CONF_OK
+}
 
 fn parse_on_off(val: &str) -> Option<bool> {
     if val.eq_ignore_ascii_case("on") {
@@ -561,58 +592,37 @@ extern "C" fn set_target_port(
     }
 }
 
-extern "C" fn set_keep_alive(
+extern "C" fn set_duration(
     cf: *mut ngx_conf_t,
-    _cmd: *mut ngx_command_t,
+    cmd: *mut ngx_command_t,
     conf: *mut c_void,
 ) -> *mut c_char {
     let Ok(val) = arg1(cf) else {
         return ngx::core::NGX_CONF_ERROR;
     };
     let conf = unsafe { &mut *(conf as *mut ModuleConfig) };
-    if let Some(v) = parse_duration_secs(&val) {
-        conf.keep_alive_secs = v;
-        ngx::core::NGX_CONF_OK
-    } else {
-        ngx_conf_log_error!(NGX_LOG_EMERG, cf, "invalid duration value");
-        ngx::core::NGX_CONF_ERROR
-    }
-}
-
-extern "C" fn set_start_timeout(
-    cf: *mut ngx_conf_t,
-    _cmd: *mut ngx_command_t,
-    conf: *mut c_void,
-) -> *mut c_char {
-    let Ok(val) = arg1(cf) else {
-        return ngx::core::NGX_CONF_ERROR;
+    let name = unsafe { (*cmd).name.to_str() };
+    let field = match name {
+        Ok("hibernator_keep_alive") => &mut conf.keep_alive_secs,
+        Ok("hibernator_start_timeout") => &mut conf.start_timeout_ms,
+        Ok("hibernator_start_check_interval") => &mut conf.start_check_interval_ms,
+        Ok("hibernator_check_timeout") => &mut conf.check_timeout_ms,
+        Ok("hibernator_up_check_interval") => &mut conf.up_check_interval_ms,
+        Ok("hibernator_starting_check_interval") => &mut conf.starting_check_interval_ms,
+        Ok("hibernator_down_check_interval") => &mut conf.down_check_interval_ms,
+        _ => return NGX_CONF_ERROR,
     };
-    let conf = unsafe { &mut *(conf as *mut ModuleConfig) };
-    if let Some(v) = parse_duration_ms(&val) {
-        conf.start_timeout_ms = v;
-        ngx::core::NGX_CONF_OK
+    let value = if name == Ok("hibernator_keep_alive") {
+        parse_duration_secs(&val)
     } else {
-        ngx_conf_log_error!(NGX_LOG_EMERG, cf, "invalid duration value");
-        ngx::core::NGX_CONF_ERROR
-    }
-}
-
-extern "C" fn set_start_check_interval(
-    cf: *mut ngx_conf_t,
-    _cmd: *mut ngx_command_t,
-    conf: *mut c_void,
-) -> *mut c_char {
-    let Ok(val) = arg1(cf) else {
-        return ngx::core::NGX_CONF_ERROR;
+        parse_duration_ms(&val)
     };
-    let conf = unsafe { &mut *(conf as *mut ModuleConfig) };
-    if let Some(v) = parse_duration_ms(&val) {
-        conf.start_check_interval_ms = v;
-        ngx::core::NGX_CONF_OK
-    } else {
+    let Some(value) = value else {
         ngx_conf_log_error!(NGX_LOG_EMERG, cf, "invalid duration value");
-        ngx::core::NGX_CONF_ERROR
-    }
+        return NGX_CONF_ERROR;
+    };
+    *field = value;
+    NGX_CONF_OK
 }
 
 extern "C" fn set_check_mode(
@@ -656,78 +666,6 @@ extern "C" fn set_check_endpoint(
     }
     conf.check_endpoint = val;
     ngx::core::NGX_CONF_OK
-}
-
-extern "C" fn set_check_timeout(
-    cf: *mut ngx_conf_t,
-    _cmd: *mut ngx_command_t,
-    conf: *mut c_void,
-) -> *mut c_char {
-    let Ok(val) = arg1(cf) else {
-        return ngx::core::NGX_CONF_ERROR;
-    };
-    let conf = unsafe { &mut *(conf as *mut ModuleConfig) };
-    if let Some(v) = parse_duration_ms(&val) {
-        conf.check_timeout_ms = v;
-        ngx::core::NGX_CONF_OK
-    } else {
-        ngx_conf_log_error!(NGX_LOG_EMERG, cf, "invalid duration value");
-        ngx::core::NGX_CONF_ERROR
-    }
-}
-
-extern "C" fn set_up_check_interval(
-    cf: *mut ngx_conf_t,
-    _cmd: *mut ngx_command_t,
-    conf: *mut c_void,
-) -> *mut c_char {
-    let Ok(val) = arg1(cf) else {
-        return ngx::core::NGX_CONF_ERROR;
-    };
-    let conf = unsafe { &mut *(conf as *mut ModuleConfig) };
-    if let Some(v) = parse_duration_ms(&val) {
-        conf.up_check_interval_ms = v;
-        ngx::core::NGX_CONF_OK
-    } else {
-        ngx_conf_log_error!(NGX_LOG_EMERG, cf, "invalid duration value");
-        ngx::core::NGX_CONF_ERROR
-    }
-}
-
-extern "C" fn set_starting_check_interval(
-    cf: *mut ngx_conf_t,
-    _cmd: *mut ngx_command_t,
-    conf: *mut c_void,
-) -> *mut c_char {
-    let Ok(val) = arg1(cf) else {
-        return ngx::core::NGX_CONF_ERROR;
-    };
-    let conf = unsafe { &mut *(conf as *mut ModuleConfig) };
-    if let Some(v) = parse_duration_ms(&val) {
-        conf.starting_check_interval_ms = v;
-        ngx::core::NGX_CONF_OK
-    } else {
-        ngx_conf_log_error!(NGX_LOG_EMERG, cf, "invalid duration value");
-        ngx::core::NGX_CONF_ERROR
-    }
-}
-
-extern "C" fn set_down_check_interval(
-    cf: *mut ngx_conf_t,
-    _cmd: *mut ngx_command_t,
-    conf: *mut c_void,
-) -> *mut c_char {
-    let Ok(val) = arg1(cf) else {
-        return ngx::core::NGX_CONF_ERROR;
-    };
-    let conf = unsafe { &mut *(conf as *mut ModuleConfig) };
-    if let Some(v) = parse_duration_ms(&val) {
-        conf.down_check_interval_ms = v;
-        ngx::core::NGX_CONF_OK
-    } else {
-        ngx_conf_log_error!(NGX_LOG_EMERG, cf, "invalid duration value");
-        ngx::core::NGX_CONF_ERROR
-    }
 }
 
 extern "C" fn set_landing_dir(

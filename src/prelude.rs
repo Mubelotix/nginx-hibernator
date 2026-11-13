@@ -7,6 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub(crate) use crate::config::ServiceCheckMode;
 pub(crate) use crate::hibernate::spawn_idle_monitor;
 pub(crate) use crate::history::SERVICE_HISTORY;
+pub(crate) use crate::landing::send_page_response;
+pub(crate) use crate::status::serve_status;
 pub(crate) use crate::runtime::spawn_future_on_runtime;
 pub(crate) use crate::service::{request_service_action, ControllerAction};
 pub(crate) use crate::state::{
@@ -25,4 +27,3 @@ pub fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map_or(0_u64, |d| d.as_millis() as u64)
 }
-
