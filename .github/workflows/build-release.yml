@@ -64,7 +64,10 @@ jobs:
           test -n "$PACKAGE"
           NGINX_PACKAGE_VERSION="$(dpkg-deb -f "$PACKAGE" X-Built-Against-Nginx)"
           test -n "$NGINX_PACKAGE_VERSION"
+          NGINX_ABI="$(dpkg-deb -f "$PACKAGE" X-Built-Against-Nginx-ABI)"
+          test -n "$NGINX_ABI"
           echo "nginx_package_version=$NGINX_PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "nginx_abi=$NGINX_ABI" >> "$GITHUB_OUTPUT"
 
       - name: Test package
         if: steps.versions.outputs.should_release == 'true'
@@ -102,7 +105,10 @@ jobs:
           tag_name: ${{ steps.versions.outputs.release_tag }}
           name: v${{ steps.versions.outputs.hibernator_version }}
           body: |
-            Built against Debian trixie nginx package ${{ steps.build_package.outputs.nginx_package_version }}
+            Requires nginx ABI **`${{ steps.build_package.outputs.nginx_abi }}`**.
+
+            Built against Debian trixie nginx package `${{ steps.build_package.outputs.nginx_package_version }}`.
+            nginx updates providing the same ABI are supported; an ABI change requires a compatible module release.
             
             ## Installation
             
