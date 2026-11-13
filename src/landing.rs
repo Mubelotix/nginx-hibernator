@@ -1,5 +1,6 @@
 use core::ptr;
 use std::path::{Component, Path, PathBuf};
+use std::str::from_utf8;
 use ngx::core::{Buffer, Status};
 use ngx::http::HttpModule;
 use ngx::ffi::{ngx_chain_t, ngx_http_request_t, ngx_int_t};
@@ -42,32 +43,17 @@ pub fn serve_landing_page(
         (b"Service is starting, please retry in a moment.\n".to_vec(), "text/plain")
     });
 
-    let body = apply_eta(body, content_type, elapsed, expected, keep_alive_secs);
+    let body = match (content_type.starts_with("text/html"), from_utf8(&body)) {
+        (true, Ok(html)) => html.replace("KEEP_ALIVE", &keep_alive_secs.to_string())
+            .replace("DONE_MS", &elapsed.to_string())
+            .replace("DURATION_MS", &expected.to_string())
+            .replace("{{ETA_SECONDS}}", &(expected.saturating_sub(elapsed) / 1000).to_string())
+            .into_bytes(),
+        _ => body,
+    };
+    let retry_after = expected.saturating_sub(elapsed).div_ceil(1000).max(1);
+    let _ = request.add_header_out("Retry-After", &retry_after.to_string());
     send_page_response(request, &body, content_type, HTTPStatus::SERVICE_UNAVAILABLE)
-}
-
-fn apply_eta(
-    body: Vec<u8>,
-    content_type: &str,
-    elapsed_ms: u64,
-    expected_ms: u64,
-    keep_alive_secs: u64,
-) -> Vec<u8> {
-    if content_type.starts_with("text/html") {
-        if let Ok(mut body_str) = String::from_utf8(body.clone()) {
-            // Support modern Lottie-based template tags
-            body_str = body_str.replace("KEEP_ALIVE", &keep_alive_secs.to_string());
-            body_str = body_str.replace("DONE_MS", &elapsed_ms.to_string());
-            body_str = body_str.replace("DURATION_MS", &expected_ms.to_string());
-
-            // Support legacy placeholder {{ETA_SECONDS}}
-            let remaining_secs = expected_ms.saturating_sub(elapsed_ms) / 1000;
-            body_str = body_str.replace("{{ETA_SECONDS}}", &remaining_secs.to_string());
-
-            return body_str.into_bytes();
-        }
-    }
-    body
 }
 
 pub fn serve_landing_prefixed_asset(request: &mut Request, landing_dir: &str) -> Status {
@@ -136,6 +122,9 @@ pub(crate) fn send_page_response(
     }
 
     request.set_status(status);
+    if status == HTTPStatus::SERVICE_UNAVAILABLE {
+        let _ = request.add_header_out("Cache-Control", "no-store");
+    }
     let _ = request.add_header_out("Content-Type", content_type);
     request.set_content_length_n(body.len());
 
